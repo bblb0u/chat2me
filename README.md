@@ -2,7 +2,7 @@
 
 这个仓库当前先落地项目规划里的“对话路由”最小闭环：
 
-- `ollama` 容器运行本地小模型，默认 `qwen2.5:3b`。
+- `ollama` 容器运行本地小模型，默认 `qwen3:4b-instruct`。
 - `voice-gateway` 容器提供 FastAPI 对话接口。
 - `voice-agent` 容器提供 ReSpeaker 唤醒、离线 ASR、连续对话和本地 Piper TTS。
 - `config/profile.yaml` 放机器人固定信息、固定问答和系统提示词。
@@ -49,12 +49,12 @@ docker compose --profile init run --rm ollama-model-init
 docker compose up -d voice-gateway
 ```
 
-默认模型使用非思考型的 `qwen2.5:3b`，比 1.7B 大一档，回答更直接，更适合实时 TTS 语音播报。
+默认模型使用 Qwen3 4B Instruct 非思考版，比 1.7B 和 `qwen2.5:3b` 更强，同时不会输出 `<think>` 思考块，更适合实时 TTS 语音播报。
 
 如需换更大的模型：
 
 ```bash
-OLLAMA_MODEL=qwen2.5:7b ./scripts/start-local.sh
+OLLAMA_MODEL=qwen3:30b-instruct ./scripts/start-local.sh
 ```
 
 如果目标网络拉 Docker Hub 很慢，可以临时替换镜像来源：
