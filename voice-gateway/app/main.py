@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 
 
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://ollama:11434").rstrip("/")
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen3:1.7b")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:3b")
 PROFILE_PATH = Path(os.getenv("PROFILE_PATH", "/app/config/profile.yaml"))
 SAFETY_PATH = Path(os.getenv("SAFETY_PATH", "/app/config/safety.yaml"))
 
@@ -82,16 +82,24 @@ def strip_thinking(text: str) -> str:
 
 
 async def call_ollama(message: str) -> str:
+    system_prompt = "\n".join(
+        item
+        for item in (
+            str(profile().get("system_prompt", "")).strip(),
+            "只输出给用户听的最终答案，不要分析题目，不要复述用户问题，不要解释你的输出规则。",
+        )
+        if item
+    )
     payload = {
         "model": OLLAMA_MODEL,
         "messages": [
-            {"role": "system", "content": str(profile().get("system_prompt", "")).strip()},
-            {"role": "user", "content": f"{message}\n\n/no_think"},
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": message},
         ],
         "stream": False,
         "think": False,
         "options": {
-            "num_ctx": 1024,
+            "num_ctx": 2048,
             "temperature": 0.2,
             "top_p": 0.9,
             "num_predict": 128,

@@ -28,7 +28,7 @@ services:
     runtime: nvidia
     environment:
       OLLAMA_HOST: http://ollama:11434
-      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3:1.7b}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:3b}
       NVIDIA_VISIBLE_DEVICES: all
       NVIDIA_DRIVER_CAPABILITIES: compute,utility
       OLLAMA_LLM_LIBRARY: cuda_jetpack5
@@ -56,7 +56,7 @@ services:
     restart: unless-stopped
     environment:
       OLLAMA_BASE_URL: http://ollama:11434
-      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3:1.7b}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:3b}
       PROFILE_PATH: /app/config/profile.yaml
       SAFETY_PATH: /app/config/safety.yaml
     ports:

@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-MODEL="${OLLAMA_MODEL:-qwen3:1.7b}"
+MODEL="${OLLAMA_MODEL:-qwen2.5:3b}"
 OLLAMA_IMAGE="${OLLAMA_IMAGE:-ollama/ollama:latest}"
 PYTHON_IMAGE="${PYTHON_IMAGE:-python:3.11-slim}"
 NETWORK_NAME="chat2m-local"
