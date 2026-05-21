@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import html
 import os
 import re
 import time
@@ -10,13 +9,8 @@ from typing import Any
 import httpx
 import yaml
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import HTMLResponse
-from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-
-APP_DIR = Path(__file__).resolve().parent
-STATIC_DIR = APP_DIR / "static"
 
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://ollama:11434").rstrip("/")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen3:0.6b")
@@ -43,7 +37,6 @@ class HealthResponse(BaseModel):
 
 
 app = FastAPI(title="Chat2M Voice Gateway", version="0.1.0")
-app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
 def load_yaml(path: Path, default: dict[str, Any]) -> dict[str, Any]:
@@ -82,32 +75,6 @@ def match_fixed_qa(message: str) -> str | None:
     return None
 
 
-def build_prompt(message: str) -> str:
-    data = profile()
-    robot = data.get("robot", {})
-    facts = "\n".join(f"- {fact}" for fact in data.get("fixed_facts", []))
-    system_prompt = data.get("system_prompt", "")
-    name = robot.get("name", "Chat2M")
-    company = robot.get("company", "待定公司")
-    persona = robot.get("persona", "")
-
-    return "\n".join(
-        [
-            str(system_prompt).strip(),
-            "",
-            f"机器人名：{name}",
-            f"公司：{company}",
-            f"人格：{persona}",
-            "",
-            "固定事实：",
-            facts,
-            "",
-            f"用户：{message}",
-            "助手：",
-        ]
-    ).strip()
-
-
 def strip_thinking(text: str) -> str:
     cleaned = re.sub(r"<think>.*?</think>", "", text, flags=re.IGNORECASE | re.DOTALL)
     cleaned = re.sub(r"</?think>", "", cleaned, flags=re.IGNORECASE)
@@ -117,25 +84,28 @@ def strip_thinking(text: str) -> str:
 async def call_ollama(message: str) -> str:
     payload = {
         "model": OLLAMA_MODEL,
-        "prompt": build_prompt(message),
+        "messages": [
+            {"role": "system", "content": str(profile().get("system_prompt", "")).strip()},
+            {"role": "user", "content": f"{message}\n\n/no_think"},
+        ],
         "stream": False,
+        "think": False,
         "options": {
-            "temperature": 0.4,
+            "num_ctx": 1024,
+            "temperature": 0.2,
             "top_p": 0.9,
-            "num_predict": 256,
+            "num_predict": 64,
+            "num_thread": 8,
         },
     }
-    timeout = httpx.Timeout(connect=5.0, read=120.0, write=10.0, pool=5.0)
+    timeout = httpx.Timeout(connect=5.0, read=180.0, write=10.0, pool=5.0)
     async with httpx.AsyncClient(timeout=timeout) as client:
-        response = await client.post(f"{OLLAMA_BASE_URL}/api/generate", json=payload)
+        response = await client.post(f"{OLLAMA_BASE_URL}/api/chat", json=payload)
         response.raise_for_status()
-    answer = response.json().get("response", "")
+    data = response.json()
+    message_data = data.get("message") or {}
+    answer = message_data.get("content") or data.get("response") or ""
     return strip_thinking(str(answer))
-
-
-@app.get("/", response_class=HTMLResponse)
-async def index() -> str:
-    return (STATIC_DIR / "index.html").read_text(encoding="utf-8")
 
 
 @app.get("/health", response_model=HealthResponse)
@@ -178,8 +148,11 @@ async def chat(request: ChatRequest) -> ChatResponse:
         if "model" in detail.lower() and "not found" in detail.lower():
             detail = f"模型 {OLLAMA_MODEL} 还未下载，请先执行模型初始化或 ollama pull。"
         raise HTTPException(status_code=502, detail=detail) from exc
+    except httpx.ReadTimeout as exc:
+        raise HTTPException(status_code=504, detail="Ollama 生成超时，建议先用固定问答或更短问题测试。") from exc
     except httpx.HTTPError as exc:
-        raise HTTPException(status_code=502, detail=f"Ollama 服务不可用：{exc}") from exc
+        detail = str(exc) or exc.__class__.__name__
+        raise HTTPException(status_code=502, detail=f"Ollama 服务不可用：{detail}") from exc
 
     if contains_blocked_keyword(answer):
         answer = blocked_response()
@@ -193,15 +166,3 @@ async def chat(request: ChatRequest) -> ChatResponse:
         model=OLLAMA_MODEL,
         latency_ms=int((time.perf_counter() - started_at) * 1000),
     )
-
-
-@app.get("/config/preview", response_class=HTMLResponse)
-async def config_preview() -> str:
-    data = {
-        "profile_path": str(PROFILE_PATH),
-        "safety_path": str(SAFETY_PATH),
-        "model": OLLAMA_MODEL,
-        "ollama_base_url": OLLAMA_BASE_URL,
-    }
-    rows = "".join(f"<tr><th>{html.escape(k)}</th><td>{html.escape(v)}</td></tr>" for k, v in data.items())
-    return f"<table>{rows}</table>"

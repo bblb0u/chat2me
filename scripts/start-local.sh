@@ -21,8 +21,14 @@ if ! docker ps --format '{{.Names}}' | grep -qx "$OLLAMA_CONTAINER"; then
   docker run -d \
     --name "$OLLAMA_CONTAINER" \
     --restart unless-stopped \
+    --runtime nvidia \
     --network "$NETWORK_NAME" \
     -p 11434:11434 \
+    -e NVIDIA_VISIBLE_DEVICES=all \
+    -e NVIDIA_DRIVER_CAPABILITIES=compute,utility \
+    -e OLLAMA_LLM_LIBRARY=cuda_jetpack5 \
+    -e JETSON_JETPACK=5 \
+    -e LD_LIBRARY_PATH=/usr/lib/ollama:/usr/lib/ollama/cuda_jetpack5:/usr/local/nvidia/lib:/usr/local/nvidia/lib64 \
     -v chat2m-ollama-data:/root/.ollama \
     "$OLLAMA_IMAGE" >/dev/null
 fi
@@ -56,6 +62,6 @@ docker run -d \
   chat2m/voice-gateway:local >/dev/null
 
 echo "Chat2M local chat is running."
-echo "Web UI:  http://localhost:8080"
-echo "Health:  http://localhost:8080/health"
-echo "Model:   $MODEL"
+echo "API:    http://localhost:8080/chat"
+echo "Health: http://localhost:8080/health"
+echo "Model:  $MODEL"

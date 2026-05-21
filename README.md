@@ -3,7 +3,8 @@
 这个仓库当前先落地项目规划里的“对话路由”最小闭环：
 
 - `ollama` 容器运行本地小模型，默认 `qwen3:0.6b`。
-- `voice-gateway` 容器提供 FastAPI 对话接口和浏览器聊天页。
+- `voice-gateway` 容器提供 FastAPI 对话接口。
+- `voice-agent` 容器提供 ReSpeaker 唤醒、离线 ASR、连续对话和本地 Piper TTS。
 - `config/profile.yaml` 放机器人固定信息、固定问答和系统提示词。
 - `config/safety.yaml` 放第一层敏感词拦截。
 
@@ -15,10 +16,12 @@
 ./scripts/start-local.sh
 ```
 
-启动后打开：
+Jetson 上会默认用 Docker 的 `nvidia` runtime 启动 Ollama，并设置 `JETSON_JETPACK=5` 与 `cuda_jetpack5` backend。
+
+启动后接口：
 
 ```text
-http://localhost:8080
+http://localhost:8080/chat
 ```
 
 命令行测试：
@@ -92,10 +95,47 @@ OLLAMA_IMAGE=<ollama镜像> PYTHON_IMAGE=<python镜像> ./scripts/start-local.sh
 - `blocked_input`：输入命中敏感词。
 - `blocked_output`：模型输出命中敏感词。
 
-## 后续接入点
+## 语音链路
 
-下一步可以在 `voice-gateway` 里继续接：
+当前语音链路：
 
-- ASR 输入：把识别文本 POST 到 `/chat`。
-- TTS 输出：把 `answer` 送到本地或在线 TTS。
-- CAN 状态屏：请求开始时发 `THINKING`，播放语音时发 `SPEAKING`，结束后发 `IDLE`。
+- 唤醒监听：`voice-agent` 常驻监听“嗨小紫 / 嘿小紫 / 小紫”。
+- ASR 输入：唤醒后使用 sherpa-onnx streaming ASR，把识别文本 POST 到 `/chat`。
+- 连续对话：唤醒后先播放“有什么可以帮助您的”，之后最多连续 8 轮，不需要每轮重复唤醒。
+- TTS 输出：Piper 本地中文 `zh_CN-huayan-medium`，合成 PCM 后直接通过 ALSA 播放。
+- 待接入：CAN 状态屏，请求开始时发 `THINKING`，播放语音时发 `SPEAKING`，结束后发 `IDLE`。
+
+## 语音唤醒
+
+先确认 `voice-gateway` 和 Ollama 已启动：
+
+```bash
+./scripts/start-local.sh
+```
+
+启动后台唤醒监听：
+
+```bash
+./scripts/start-voice-agent.sh
+docker logs -f chat2m-voice-agent
+```
+
+首次启动会自动下载 sherpa-onnx KWS/ASR 模型和 Piper 中文 TTS 模型到 `models/`。这些模型文件只保留在本地，不提交到 Git。
+
+默认输入设备匹配 `ReSpeaker`，默认输出设备用 ALSA `default`。可以覆盖：
+
+```bash
+AUDIO_INPUT_DEVICE=ReSpeaker AUDIO_OUTPUT_DEVICE=hw:0,0 ./scripts/start-voice-agent.sh
+```
+
+Piper 语速可以用 `PIPER_LENGTH_SCALE` 调整，数值越大越慢：
+
+```bash
+PIPER_LENGTH_SCALE=1.0 ./scripts/start-voice-agent.sh
+```
+
+停止：
+
+```bash
+./scripts/stop-voice-agent.sh
+```

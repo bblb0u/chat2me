@@ -3,6 +3,13 @@ services:
     image: ${OLLAMA_IMAGE:-ollama/ollama:latest}
     container_name: chat2m-ollama
     restart: unless-stopped
+    runtime: nvidia
+    environment:
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+      OLLAMA_LLM_LIBRARY: cuda_jetpack5
+      JETSON_JETPACK: "5"
+      LD_LIBRARY_PATH: /usr/lib/ollama:/usr/lib/ollama/cuda_jetpack5:/usr/local/nvidia/lib:/usr/local/nvidia/lib64
     ports:
       - "11434:11434"
     volumes:
@@ -18,9 +25,15 @@ services:
     image: ${OLLAMA_IMAGE:-ollama/ollama:latest}
     container_name: chat2m-ollama-model-init
     profiles: ["init"]
+    runtime: nvidia
     environment:
       OLLAMA_HOST: http://ollama:11434
       OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3:0.6b}
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+      OLLAMA_LLM_LIBRARY: cuda_jetpack5
+      JETSON_JETPACK: "5"
+      LD_LIBRARY_PATH: /usr/lib/ollama:/usr/lib/ollama/cuda_jetpack5:/usr/local/nvidia/lib:/usr/local/nvidia/lib64
     depends_on:
       ollama:
         condition: service_started
@@ -52,6 +65,40 @@ services:
       - ./config:/app/config:ro
     depends_on:
       ollama:
+        condition: service_started
+
+  voice-agent:
+    build:
+      context: ./voice-agent
+    image: chat2m/voice-agent:local
+    container_name: chat2m-voice-agent
+    restart: unless-stopped
+    profiles: ["voice"]
+    devices:
+      - /dev/snd:/dev/snd
+    environment:
+      AUDIO_INPUT_DEVICE: ${AUDIO_INPUT_DEVICE:-ReSpeaker}
+      AUDIO_INPUT_CHANNELS: ${AUDIO_INPUT_CHANNELS:-1}
+      AUDIO_INPUT_CHANNEL_INDEX: ${AUDIO_INPUT_CHANNEL_INDEX:-0}
+      AUDIO_OUTPUT_DEVICE: ${AUDIO_OUTPUT_DEVICE:-default}
+      GATEWAY_URL: http://voice-gateway:8080/chat
+      COMMAND_TIMEOUT_SECONDS: ${COMMAND_TIMEOUT_SECONDS:-10}
+      COMMAND_LEADING_SILENCE_SECONDS: ${COMMAND_LEADING_SILENCE_SECONDS:-4}
+      SPEECH_RMS_THRESHOLD: ${SPEECH_RMS_THRESHOLD:-0.006}
+      PIPER_MODEL: ${PIPER_MODEL:-/models/piper/zh_CN-huayan-medium/model.onnx}
+      PIPER_CONFIG: ${PIPER_CONFIG:-/models/piper/zh_CN-huayan-medium/model.onnx.json}
+      PIPER_SPEAKER: ${PIPER_SPEAKER:-0}
+      PIPER_LENGTH_SCALE: ${PIPER_LENGTH_SCALE:-0.9}
+      PIPER_VOLUME: ${PIPER_VOLUME:-1.0}
+      WAKE_RESPONSE: ${WAKE_RESPONSE:-有什么可以帮助您的}
+      SESSION_IDLE_RESPONSE: ${SESSION_IDLE_RESPONSE:-}
+      SESSION_END_RESPONSE: ${SESSION_END_RESPONSE:-好的，我先待机}
+      MAX_SESSION_TURNS: ${MAX_SESSION_TURNS:-8}
+    volumes:
+      - ./models:/models
+      - ./config:/app/config:ro
+    depends_on:
+      voice-gateway:
         condition: service_started
 
 volumes:
