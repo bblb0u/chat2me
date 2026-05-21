@@ -101,7 +101,7 @@ OLLAMA_IMAGE=<ollama镜像> PYTHON_IMAGE=<python镜像> ./scripts/start-local.sh
 
 当前语音链路：
 
-- 唤醒监听：`voice-agent` 常驻监听“嗨小紫 / 嘿小紫 / 小紫”。
+- 唤醒监听：`voice-agent` 常驻监听“嗨小江”。
 - ASR 输入：唤醒后使用 sherpa-onnx streaming ASR，把识别文本 POST 到 `/chat`。
 - 连续对话：唤醒后先播放“有什么可以帮助您的”，之后最多连续 8 轮，不需要每轮重复唤醒。
 - TTS 输出：Piper 本地中文 `zh_CN-huayan-medium`，合成 PCM 后直接通过 ALSA 播放。

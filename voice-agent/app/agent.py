@@ -105,7 +105,7 @@ def ensure_keywords_file() -> Path:
 
     if not KEYWORDS_RAW.is_file():
         KEYWORDS_RAW.parent.mkdir(parents=True, exist_ok=True)
-        KEYWORDS_RAW.write_text("嗨小紫 @嗨小紫\n", encoding="utf-8")
+        KEYWORDS_RAW.write_text("嗨小江 @嗨小江\n", encoding="utf-8")
 
     keywords_file.parent.mkdir(parents=True, exist_ok=True)
     cmd = [
@@ -417,7 +417,7 @@ def main() -> None:
     beep_path = Path(tempfile.gettempdir()) / "chat2m_wake.wav"
     write_beep(beep_path)
 
-    log("wake listener active: 嗨小紫")
+    log("wake listener active: 嗨小江")
     with sd.InputStream(
         channels=INPUT_CHANNELS,
         dtype="float32",
@@ -440,7 +440,7 @@ def main() -> None:
                         log(f"wake handling failed: {exc}")
                     drain_audio(audio, POST_RESPONSE_DRAIN_SECONDS)
                     stream = kws.create_stream()
-                    log("wake listener active: 嗨小紫")
+                    log("wake listener active: 嗨小江")
                     break
 
 

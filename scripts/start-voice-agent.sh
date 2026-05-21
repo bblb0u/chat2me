@@ -46,5 +46,5 @@ docker run -d \
   chat2m/voice-agent:local >/dev/null
 
 echo "Chat2M voice agent is running."
-echo "Wake word: 嗨小紫"
+echo "Wake word: 嗨小江"
 echo "Logs: docker logs -f $CONTAINER_NAME"
