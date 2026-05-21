@@ -1,0 +1,58 @@
+services:
+  ollama:
+    image: ${OLLAMA_IMAGE:-ollama/ollama:latest}
+    container_name: chat2m-ollama
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-data:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+
+  ollama-model-init:
+    image: ${OLLAMA_IMAGE:-ollama/ollama:latest}
+    container_name: chat2m-ollama-model-init
+    profiles: ["init"]
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3:0.6b}
+    depends_on:
+      ollama:
+        condition: service_started
+    entrypoint:
+      - /bin/sh
+      - -lc
+      - |
+        until ollama list >/dev/null 2>&1; do
+          sleep 2
+        done
+        ollama pull "$${OLLAMA_MODEL}"
+
+  voice-gateway:
+    build:
+      context: ./voice-gateway
+      args:
+        PYTHON_IMAGE: ${PYTHON_IMAGE:-python:3.11-slim}
+    image: chat2m/voice-gateway:local
+    container_name: chat2m-voice-gateway
+    restart: unless-stopped
+    environment:
+      OLLAMA_BASE_URL: http://ollama:11434
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3:0.6b}
+      PROFILE_PATH: /app/config/profile.yaml
+      SAFETY_PATH: /app/config/safety.yaml
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./config:/app/config:ro
+    depends_on:
+      ollama:
+        condition: service_started
+
+volumes:
+  ollama-data:

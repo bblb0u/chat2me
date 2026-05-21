@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Chat2M 本地对话</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <section class="chat-panel" aria-label="Chat2M 本地对话">
+        <header class="topbar">
+          <div>
+            <h1>Chat2M</h1>
+            <p id="status">检查本地模型服务...</p>
+          </div>
+          <button id="healthButton" type="button">刷新状态</button>
+        </header>
+
+        <div id="messages" class="messages" aria-live="polite">
+          <article class="message assistant">
+            <div class="bubble">本地对话网关已启动。可以先问：你叫什么？你能做什么？</div>
+          </article>
+        </div>
+
+        <form id="chatForm" class="composer">
+          <textarea
+            id="messageInput"
+            name="message"
+            rows="2"
+            maxlength="2000"
+            placeholder="输入一句话..."
+            required
+          ></textarea>
+          <button id="sendButton" type="submit">发送</button>
+        </form>
+      </section>
+    </main>
+    <script src="/static/app.js"></script>
+  </body>
+</html>

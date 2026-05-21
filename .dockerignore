@@ -1,0 +1,9 @@
+.git
+.agents
+.codex
+__pycache__
+*.pyc
+.pytest_cache
+.venv
+venv
+ollama-data
