@@ -2,11 +2,7 @@ name: chat2m
 
 services:
   ollama:
-    build:
-      context: .
-      dockerfile: ollama/Dockerfile
-    image: ollama:local
-    pull_policy: build
+    image: bblb0o/ollama:latest
     container_name: ollama
     restart: unless-stopped
     runtime: nvidia
@@ -29,11 +25,7 @@ services:
       start_period: 20s
 
   chat2m-gateway:
-    build:
-      context: .
-      dockerfile: voice-gateway/Dockerfile
-    image: chat2m-gateway:local
-    pull_policy: build
+    image: bblb0o/chat2m-gateway:latest
     container_name: chat2m-gateway
     restart: unless-stopped
     environment:
@@ -50,11 +42,7 @@ services:
         condition: service_started
 
   chat2m-status:
-    build:
-      context: .
-      dockerfile: voice-agent/Dockerfile
-    image: chat2m-status:local
-    pull_policy: build
+    image: bblb0o/chat2m-status:latest
     container_name: chat2m-status
     restart: unless-stopped
     privileged: true
@@ -71,11 +59,7 @@ services:
       STATUS_PORT: 8091
 
   chat2m-speech:
-    build:
-      context: .
-      dockerfile: voice-agent/Dockerfile
-    image: chat2m-speech:local
-    pull_policy: build
+    image: bblb0o/chat2m-speech:latest
     container_name: chat2m-speech
     restart: unless-stopped
     devices:
@@ -113,11 +97,7 @@ services:
         condition: service_started
 
   chat2m-wake:
-    build:
-      context: .
-      dockerfile: voice-agent/Dockerfile
-    image: chat2m-wake:local
-    pull_policy: build
+    image: bblb0o/chat2m-wake:latest
     container_name: chat2m-wake
     restart: unless-stopped
     devices:
