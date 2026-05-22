@@ -159,15 +159,88 @@ piper_model_ok() {
     && piper_runtime_ok
 }
 
+content_length() {
+  curl -fsSIL --retry 5 --connect-timeout 20 "$1" \
+    | awk 'tolower($1) == "content-length:" { size = $2 } END { gsub("\r", "", size); print size }'
+}
+
+print_download_progress() {
+  label="$1"
+  completed="$2"
+  total="$3"
+
+  case "$completed" in ''|*[!0-9]*) completed=0 ;; esac
+  case "$total" in ''|*[!0-9]*) total=0 ;; esac
+
+  if [ "$total" -gt 0 ]; then
+    awk -v label="$label" -v done="$completed" -v total="$total" '
+      BEGIN {
+        width = 24
+        pct = int(done * 100 / total)
+        if (pct > 100) pct = 100
+        filled = int(pct * width / 100)
+        bar = ""
+        for (i = 0; i < width; i++) bar = bar (i < filled ? "#" : "-")
+        printf("[models] %s [%s] %3d%% %.1f/%.1f MB\n", label, bar, pct, done / 1048576, total / 1048576)
+      }'
+  else
+    awk -v label="$label" -v done="$completed" '
+      BEGIN {
+        printf("[models] %s %.1f MB downloaded\n", label, done / 1048576)
+      }'
+  fi
+}
+
+download_with_progress() {
+  output="$1"
+  url="$2"
+  label="$3"
+  tmp="$output.download"
+
+  mkdir -p "$(dirname "$output")"
+  rm -f "$tmp"
+  total="$(content_length "$url" || true)"
+  echo "[models] downloading $label"
+  print_download_progress "$label" 0 "$total"
+
+  curl -fL --retry 5 --connect-timeout 20 --silent --show-error "$url" -o "$tmp" &
+  curl_pid="$!"
+
+  (
+    while kill -0 "$curl_pid" 2>/dev/null; do
+      if [ -f "$tmp" ]; then
+        completed="$(wc -c < "$tmp" | tr -d ' ')"
+        print_download_progress "$label" "$completed" "$total"
+      fi
+      sleep 5
+    done
+  ) &
+  progress_pid="$!"
+
+  if ! wait "$curl_pid"; then
+    kill "$progress_pid" 2>/dev/null || true
+    wait "$progress_pid" 2>/dev/null || true
+    rm -f "$tmp"
+    return 1
+  fi
+
+  kill "$progress_pid" 2>/dev/null || true
+  wait "$progress_pid" 2>/dev/null || true
+  completed="$(wc -c < "$tmp" | tr -d ' ')"
+  print_download_progress "$label" "$completed" "$total"
+  mv "$tmp" "$output"
+}
+
 download_and_extract() {
   name="$1"
   url="$2"
   target="$MODELS_DIR/$name"
   archive="$MODELS_DIR/$name.tar.bz2"
 
-  echo "Downloading $name"
+  echo "[models] preparing $name"
   rm -rf "$target"
-  curl -fL --retry 5 --connect-timeout 20 "$url" -o "$archive"
+  download_with_progress "$archive" "$url" "$name"
+  echo "[models] extracting $name"
   python3 - "$archive" "$MODELS_DIR" <<'PY'
 import sys
 import tarfile
@@ -176,6 +249,7 @@ with tarfile.open(sys.argv[1], "r:bz2") as archive:
     archive.extractall(sys.argv[2])
 PY
   rm -f "$archive"
+  echo "[models] extracted $name"
 }
 
 download_file() {
@@ -183,9 +257,8 @@ download_file() {
   url="$2"
 
   mkdir -p "$(dirname "$output")"
-  echo "Downloading $(basename "$output")"
   rm -f "$output"
-  curl -fL --retry 5 --connect-timeout 20 "$url" -o "$output"
+  download_with_progress "$output" "$url" "$(basename "$output")"
 }
 
 ensure_archive_model() {
@@ -201,6 +274,7 @@ ensure_archive_model() {
   echo "$name is missing or invalid; re-downloading"
   download_and_extract "$name" "$url"
 
+  echo "[models] validating $name"
   if ! "$check_name"; then
     echo "$name is still invalid after download" >&2
     exit 1
@@ -222,6 +296,7 @@ ensure_piper_model() {
     "$PIPER_DIR/model.onnx.json" \
     "https://huggingface.co/rhasspy/piper-voices/resolve/main/zh/zh_CN/huayan/medium/zh_CN-huayan-medium.onnx.json"
 
+  echo "[models] validating piper zh_CN-huayan-medium"
   if ! piper_model_ok; then
     echo "piper zh_CN-huayan-medium is still invalid after download" >&2
     exit 1
@@ -237,9 +312,10 @@ fi
 mkdir -p "$MODELS_DIR"
 LOCK_DIR="$MODELS_DIR/.download.lock"
 while ! mkdir "$LOCK_DIR" 2>/dev/null; do
-  echo "Waiting for voice model download lock"
+  echo "[models] waiting for voice model download lock"
   sleep 2
 done
+echo "[models] voice model download lock acquired"
 trap 'rmdir "$LOCK_DIR"' EXIT
 
 ensure_archive_model \
