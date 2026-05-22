@@ -19,10 +19,12 @@ Supported states:
 ## Build And Flash
 
 ```bash
-. /opt/esp-idf-v5.3.5/export.sh
+. /opt/esp-idf-v5.5.4/export.sh
 cd /opt/chat2m/display-firmware
 idf.py build
 idf.py -p /dev/ttyACM0 flash
 ```
+
+Use ESP-IDF 5.5.x for this board. The Waveshare examples require ESP-IDF 5.4.0 or newer, and this firmware has been verified with ESP-IDF 5.5.4.
 
 The boot sequence shows red, green, blue, and white bars for a few seconds before the Chat2M status UI starts. That makes it easier to distinguish a panel data-path issue from a voice-agent status issue.
