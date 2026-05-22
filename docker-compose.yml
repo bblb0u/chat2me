@@ -76,12 +76,15 @@ services:
     profiles: ["voice"]
     devices:
       - /dev/snd:/dev/snd
+      - ${DISPLAY_SERIAL_DEVICE:-/dev/ttyACM0}:${DISPLAY_SERIAL_DEVICE:-/dev/ttyACM0}
     environment:
       AUDIO_INPUT_DEVICE: ${AUDIO_INPUT_DEVICE:-ReSpeaker}
       AUDIO_INPUT_CHANNELS: ${AUDIO_INPUT_CHANNELS:-1}
       AUDIO_INPUT_CHANNEL_INDEX: ${AUDIO_INPUT_CHANNEL_INDEX:-0}
-      AUDIO_OUTPUT_DEVICE: ${AUDIO_OUTPUT_DEVICE:-default}
+      AUDIO_OUTPUT_DEVICE: ${AUDIO_OUTPUT_DEVICE:-plughw:CARD=ArrayUAC10,DEV=0}
       GATEWAY_URL: http://voice-gateway:8080/chat
+      DISPLAY_SERIAL_PORT: ${DISPLAY_SERIAL_PORT:-/dev/ttyACM0}
+      DISPLAY_SERIAL_BAUD: ${DISPLAY_SERIAL_BAUD:-115200}
       WAKE_WORDS: ${WAKE_WORDS:-嗨小江,嘿小江,小江}
       KWS_KEYWORDS_SCORE: ${KWS_KEYWORDS_SCORE:-1.5}
       KWS_KEYWORDS_THRESHOLD: ${KWS_KEYWORDS_THRESHOLD:-0.25}
@@ -101,6 +104,7 @@ services:
     volumes:
       - ./models:/models
       - ./config:/app/config:ro
+      - /etc/asound.conf:/etc/asound.conf:ro
     depends_on:
       voice-gateway:
         condition: service_started

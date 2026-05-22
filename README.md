@@ -112,7 +112,7 @@ OLLAMA_IMAGE=<ollama镜像> PYTHON_IMAGE=<python镜像> ./scripts/start-local.sh
 - 连续对话：唤醒后先播放“有什么可以帮助您的”，之后最多连续 8 轮，不需要每轮重复唤醒。
 - 退出会话：说“退下吧”“你走吧”“走吧”“不用了”“再见”等会回到待机。
 - TTS 输出：Piper 本地中文 `zh_CN-huayan-medium`，合成 PCM 后直接通过 ALSA 播放。
-- 待接入：CAN 状态屏，请求开始时发 `THINKING`，播放语音时发 `SPEAKING`，结束后发 `IDLE`。
+- 状态屏：Waveshare ESP32-S3-Touch-LCD-3.5B 通过 USB 串口接收 `IDLE` / `LISTENING` / `THINKING` / `SPEAKING` / `ERROR` 状态。
 
 ## 语音唤醒
 
@@ -138,16 +138,22 @@ docker logs -f chat2m-voice-agent
 
 首次启动会自动下载 sherpa-onnx KWS/ASR 模型和 Piper 中文 TTS 模型到 `models/`。这些模型文件只保留在本地，不提交到 Git。
 
-默认输入设备匹配 `ReSpeaker`，默认输出设备用 ALSA `default`。可以覆盖：
+默认输入设备匹配 `ReSpeaker`，默认输出设备用 ReSpeaker USB 声卡 `plughw:CARD=ArrayUAC10,DEV=0`。可以覆盖：
 
 ```bash
-AUDIO_INPUT_DEVICE=ReSpeaker AUDIO_OUTPUT_DEVICE=hw:0,0 ./scripts/start-voice-agent.sh
+AUDIO_INPUT_DEVICE=ReSpeaker AUDIO_OUTPUT_DEVICE=plughw:CARD=HDA,DEV=3 ./scripts/start-voice-agent.sh
 ```
 
 Piper 语速可以用 `PIPER_LENGTH_SCALE` 调整，数值越大越慢：
 
 ```bash
 PIPER_LENGTH_SCALE=1.0 ./scripts/start-voice-agent.sh
+```
+
+显示屏默认自动使用 `/dev/ttyACM0`。如果端口不同，可以覆盖：
+
+```bash
+DISPLAY_SERIAL_PORT=/dev/ttyACM1 ./scripts/start-voice-agent.sh
 ```
 
 停止：

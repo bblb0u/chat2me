@@ -6,3 +6,4 @@ venv/
 ollama-data/
 models/
 tools/
+vendor/

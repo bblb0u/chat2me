@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import gc
+import json
 import os
 import re
+import threading
 import subprocess
 import sys
 import tempfile
@@ -15,6 +17,7 @@ import httpx
 import numpy as np
 from piper.config import SynthesisConfig
 from piper.voice import PiperVoice
+import serial
 import sherpa_onnx
 import sounddevice as sd
 
@@ -38,6 +41,8 @@ WAKE_WORDS = tuple(
 )
 
 GATEWAY_URL = os.getenv("GATEWAY_URL", "http://voice-gateway:8080/chat")
+DISPLAY_SERIAL_PORT = os.getenv("DISPLAY_SERIAL_PORT", "")
+DISPLAY_SERIAL_BAUD = int(os.getenv("DISPLAY_SERIAL_BAUD", "115200"))
 INPUT_DEVICE = os.getenv("AUDIO_INPUT_DEVICE", "ReSpeaker")
 OUTPUT_DEVICE = os.getenv("AUDIO_OUTPUT_DEVICE", "default")
 SAMPLE_RATE = int(os.getenv("AUDIO_SAMPLE_RATE", "16000"))
@@ -82,6 +87,51 @@ def log(message: str) -> None:
 def require_file(path: Path) -> None:
     if not path.is_file():
         raise FileNotFoundError(f"missing required file: {path}")
+
+
+class DisplayClient:
+    def __init__(self, port: str, baud: int) -> None:
+        self.port = port
+        self.baud = baud
+        self._serial: serial.Serial | None = None
+        self._lock = threading.Lock()
+        self._disabled_until = 0.0
+
+    @property
+    def enabled(self) -> bool:
+        return bool(self.port)
+
+    def close(self) -> None:
+        with self._lock:
+            self._close_locked()
+
+    def _close_locked(self) -> None:
+        if self._serial is not None:
+            self._serial.close()
+            self._serial = None
+
+    def set_state(self, state: str, text: str = "") -> None:
+        if not self.enabled:
+            return
+        if time.monotonic() < self._disabled_until:
+            return
+        payload = {
+            "state": state,
+            "text": text[:80],
+            "ts": int(time.time()),
+        }
+        line = (json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
+        with self._lock:
+            try:
+                if self._serial is None or not self._serial.is_open:
+                    self._serial = serial.Serial(self.port, self.baud, timeout=0, write_timeout=1)
+                    time.sleep(0.1)
+                self._serial.write(line)
+                self._serial.flush()
+            except serial.SerialException as exc:
+                log(f"display serial write failed: {exc}")
+                self._close_locked()
+                self._disabled_until = time.monotonic() + 5.0
 
 
 def wake_words_display() -> str:
@@ -273,6 +323,24 @@ def speak(text: str, voice: PiperVoice, config: SynthesisConfig) -> None:
         raise RuntimeError(f"aplay exited with status {return_code}")
 
 
+def speak_pausing_input(
+    audio: sd.InputStream,
+    text: str,
+    voice: PiperVoice,
+    config: SynthesisConfig,
+    display: DisplayClient,
+) -> None:
+    if not text:
+        return
+    display.set_state("speaking", text)
+    audio.stop()
+    try:
+        speak(text, voice, config)
+    finally:
+        audio.start()
+        display.set_state("listening")
+
+
 def drain_audio(audio: sd.InputStream, seconds: float) -> None:
     chunk = int(0.1 * SAMPLE_RATE)
     deadline = time.monotonic() + seconds
@@ -365,22 +433,31 @@ def is_session_end(command: str) -> bool:
     return any(phrase in normalized for phrase in SESSION_END_PHRASES)
 
 
-def handle_conversation_turn(command: str, voice: PiperVoice, tts_config: SynthesisConfig) -> bool:
+def handle_conversation_turn(
+    audio: sd.InputStream,
+    command: str,
+    voice: PiperVoice,
+    tts_config: SynthesisConfig,
+    display: DisplayClient,
+) -> bool:
     if is_session_end(command):
         log(f"session end command: {command}")
-        speak(SESSION_END_RESPONSE, voice, tts_config)
+        speak_pausing_input(audio, SESSION_END_RESPONSE, voice, tts_config, display)
+        display.set_state("idle")
         return False
 
     log(f"recognized command: {command}")
+    display.set_state("thinking", command)
     try:
         answer = ask_gateway(command)
     except Exception as exc:
         log(f"gateway request failed: {exc}")
-        speak("对话服务暂时不可用", voice, tts_config)
+        display.set_state("error", "gateway unavailable")
+        speak_pausing_input(audio, "对话服务暂时不可用", voice, tts_config, display)
         return True
 
     log(f"answer: {answer}")
-    speak(answer, voice, tts_config)
+    speak_pausing_input(audio, answer, voice, tts_config, display)
     return True
 
 
@@ -390,9 +467,11 @@ def handle_wake(
     recognizer: sherpa_onnx.OnlineRecognizer,
     voice: PiperVoice,
     tts_config: SynthesisConfig,
+    display: DisplayClient,
 ) -> None:
     log("wake detected")
-    speak(WAKE_RESPONSE, voice, tts_config)
+    display.set_state("listening", "wake")
+    speak_pausing_input(audio, WAKE_RESPONSE, voice, tts_config, display)
     drain_audio(audio, POST_RESPONSE_DRAIN_SECONDS)
 
     for turn in range(1, MAX_SESSION_TURNS + 1):
@@ -401,27 +480,33 @@ def handle_wake(
             command = listen_command(audio, beep_path, recognizer, play_ready_beep=False)
         except Exception as exc:
             log(f"asr failed in conversation: {exc}")
-            speak("语音识别出错", voice, tts_config)
+            display.set_state("error", "asr failed")
+            speak_pausing_input(audio, "语音识别出错", voice, tts_config, display)
             return
 
         if not command:
             log("conversation idle timeout")
             if SESSION_IDLE_RESPONSE:
-                speak(SESSION_IDLE_RESPONSE, voice, tts_config)
+                speak_pausing_input(audio, SESSION_IDLE_RESPONSE, voice, tts_config, display)
+            display.set_state("idle")
             return
 
-        if not handle_conversation_turn(command, voice, tts_config):
+        if not handle_conversation_turn(audio, command, voice, tts_config, display):
             return
         drain_audio(audio, POST_RESPONSE_DRAIN_SECONDS)
 
     log("conversation reached max turns")
-    speak(SESSION_END_RESPONSE, voice, tts_config)
+    speak_pausing_input(audio, SESSION_END_RESPONSE, voice, tts_config, display)
+    display.set_state("idle")
 
 
 def main() -> None:
     input_device = select_input_device(INPUT_DEVICE)
     log(f"input device: {input_device if input_device is not None else 'default'}")
     log(f"output device: {OUTPUT_DEVICE}")
+    display = DisplayClient(DISPLAY_SERIAL_PORT, DISPLAY_SERIAL_BAUD)
+    log(f"display serial: {DISPLAY_SERIAL_PORT or 'disabled'}")
+    display.set_state("idle")
     log(f"input channels: {INPUT_CHANNELS}, selected channel: {INPUT_CHANNEL_INDEX}")
     log(f"loading Piper TTS model: {PIPER_MODEL}")
     voice, tts_config = create_tts()
@@ -459,9 +544,10 @@ def main() -> None:
                     log(f"wake keyword matched: {result}")
                     kws.reset_stream(stream)
                     try:
-                        handle_wake(audio, beep_path, recognizer, voice, tts_config)
+                        handle_wake(audio, beep_path, recognizer, voice, tts_config, display)
                     except Exception as exc:
                         log(f"wake handling failed: {exc}")
+                        display.set_state("error", str(exc))
                     drain_audio(audio, POST_RESPONSE_DRAIN_SECONDS)
                     stream = kws.create_stream()
                     log(f"wake listener active: {wake_words_display()}")
