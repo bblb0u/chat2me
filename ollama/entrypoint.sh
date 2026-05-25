@@ -4,7 +4,6 @@ set -eu
 DEFAULT_CONFIG_DIR="${DEFAULT_CONFIG_DIR:-/defaults/config}"
 CONFIG_DIR="${CONFIG_DIR:-/app/config}"
 RUNTIME_CONFIG_PATH="${RUNTIME_CONFIG_PATH:-$CONFIG_DIR/runtime.env}"
-MODEL="${OLLAMA_MODEL:-qwen3:4b-instruct}"
 
 init_config() {
   if [ ! -d "$DEFAULT_CONFIG_DIR" ]; then

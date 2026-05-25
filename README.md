@@ -2,7 +2,7 @@
 
 这个仓库当前先落地项目规划里的“对话路由”最小闭环：
 
-- `ollama` 容器运行本地小模型，默认 `qwen3:4b-instruct`。
+- `ollama` 容器运行本地小模型，默认 `qwen3:4b-instruct`；也可以在 `runtime.env` 切到 OpenAI、DeepSeek 或自建 OpenAI-compatible 接口。
 - `chat2m-gateway` 容器提供 FastAPI 对话接口。
 - `chat2m-wake` 容器负责麦克风唤醒词监听。
 - `chat2m-speech` 容器负责离线 ASR、连续对话和本地 Piper TTS。
@@ -18,7 +18,7 @@ docker compose up -d
 ```
 
 Jetson 上会默认用 Docker 的 `nvidia` runtime 启动 Ollama，并设置 `JETSON_JETPACK=5` 与 `cuda_jetpack5` backend。
-`ollama` 容器启动时会在后台检查默认模型 `qwen3:4b-instruct`，可用则复用，不可用会删除后重新拉取。
+`ollama` 容器启动后会在后台检查 `OLLAMA_MODEL`，可用则复用，不可用会删除后重新拉取。切到远程 provider 时仍会保留这个本地模型，供离线会话使用。
 
 服务默认只在 Docker Compose 内部网络通信，不向宿主机暴露端口。
 
@@ -35,6 +35,54 @@ docker compose down
 ```
 
 默认模型使用 Qwen3 4B Instruct 非思考版，比 1.7B 和 `qwen2.5:3b` 更强，同时不会输出 `<think>` 思考块，更适合实时 TTS 语音播报。
+
+## 大模型配置
+
+运行时请改 `data/config/runtime.env`，改完重启相关容器：
+
+```bash
+docker compose up -d --force-recreate ollama chat2m-gateway chat2m-speech chat2m-wake
+```
+
+本地 Ollama：
+
+```env
+LLM_PROVIDER=ollama
+LLM_MODEL=qwen3:4b-instruct
+OLLAMA_MODEL=qwen3:4b-instruct
+```
+
+OpenAI：
+
+```env
+LLM_PROVIDER=openai
+LLM_MODEL=gpt-5-mini
+LLM_API_KEY=sk-...
+OLLAMA_MODEL=qwen3:4b-instruct
+```
+
+DeepSeek：
+
+```env
+LLM_PROVIDER=deepseek
+LLM_MODEL=deepseek-v4-flash
+LLM_API_KEY=sk-...
+OLLAMA_MODEL=qwen3:4b-instruct
+```
+
+自建或第三方 OpenAI-compatible 服务：
+
+```env
+LLM_PROVIDER=openai_compatible
+LLM_BASE_URL=http://192.168.1.10:8000/v1
+LLM_MODEL=your-model-name
+LLM_API_KEY=your-api-key
+OLLAMA_MODEL=qwen3:4b-instruct
+```
+
+屏蔽词、固定问答和 `system_prompt` 仍然由 `chat2m-gateway` 统一处理。切换 provider 只替换最终生成答案的大模型后端；输入会先过 `safety.yaml` 和 `profile.yaml`，模型输出后也会再过一次屏蔽词检查。
+
+远程 provider 的可达性由 `chat2m-gateway` 后台周期探测，默认每 5 秒探一次，超时 1.5 秒；`chat2m-speech` 默认每 2 秒同步一次这个结果到自己的内存缓存。语音唤醒后只读取 speech 内存缓存，不做任何网络探测：缓存在线则本轮会话固定调用在线模型，缓存离线则本轮会话固定调用本地 `OLLAMA_MODEL`。如果本轮选择在线模型但中途网络不可用，会播报“网络连接不可用”并结束本轮会话，等待下一次唤醒。
 
 ## API
 
@@ -66,7 +114,8 @@ docker compose down
 `route` 说明：
 
 - `fixed_qa`：命中固定问答，没有调用模型。会对 ASR 文本做基础归一化，去掉空格、标点和常见前缀后再匹配。
-- `ollama`：调用本地小模型。
+- `local`：调用本地 Ollama 模型。
+- `online`：调用远程 OpenAI-compatible 模型。
 - `blocked_input`：输入命中敏感词。
 - `blocked_output`：模型输出命中敏感词。
 

@@ -56,6 +56,9 @@ WAKE_WORDS = tuple(
 ) or DEFAULT_WAKE_WORDS
 
 GATEWAY_URL = os.getenv("GATEWAY_URL", "http://chat2m-gateway:8080/chat")
+GATEWAY_REACHABILITY_URL = os.getenv("GATEWAY_REACHABILITY_URL", GATEWAY_URL.rsplit("/", 1)[0] + "/llm/reachability")
+NETWORK_UNAVAILABLE_RESPONSE = os.getenv("NETWORK_UNAVAILABLE_RESPONSE", "网络连接不可用")
+LLM_ROUTE_CACHE_INTERVAL_SECONDS = float(os.getenv("LLM_ROUTE_CACHE_INTERVAL_SECONDS", "2"))
 DISPLAY_SERIAL_PORT = os.getenv("DISPLAY_SERIAL_PORT", "")
 DISPLAY_SERIAL_BAUD = int(os.getenv("DISPLAY_SERIAL_BAUD", "115200"))
 INPUT_DEVICE = os.getenv("AUDIO_INPUT_DEVICE", "ReSpeaker")
@@ -93,6 +96,14 @@ SESSION_END_PHRASES = tuple(
     ).split(",")
     if phrase.strip()
 )
+LLM_ROUTE_CACHE = {
+    "route": "local",
+    "provider": "",
+    "model": "",
+    "status": "not_checked",
+    "updated_at": 0.0,
+}
+LLM_ROUTE_CACHE_LOCK = threading.Lock()
 
 
 def log(message: str) -> None:
@@ -420,10 +431,67 @@ def listen_command(
     return final_text
 
 
-def ask_gateway(text: str) -> str:
+class OnlineModelUnavailable(RuntimeError):
+    pass
+
+
+def refresh_llm_route_cache() -> None:
+    try:
+        with httpx.Client(timeout=1.0) as client:
+            response = client.get(GATEWAY_REACHABILITY_URL)
+            response.raise_for_status()
+            data: dict[str, Any] = response.json()
+    except Exception as exc:
+        log(f"llm reachability cache unavailable: {exc}")
+        data = {"online": False, "provider": "", "model": "", "status": "unavailable"}
+
+    route = "online" if data.get("online") is True else "local"
+    with LLM_ROUTE_CACHE_LOCK:
+        LLM_ROUTE_CACHE.update(
+            {
+                "route": route,
+                "provider": str(data.get("provider") or ""),
+                "model": str(data.get("model") or ""),
+                "status": str(data.get("status") or ""),
+                "updated_at": time.time(),
+            }
+        )
+
+
+def llm_route_cache_loop() -> None:
+    interval = max(0.5, LLM_ROUTE_CACHE_INTERVAL_SECONDS)
+    while True:
+        refresh_llm_route_cache()
+        time.sleep(interval)
+
+
+def start_llm_route_cache() -> None:
+    refresh_llm_route_cache()
+    threading.Thread(target=llm_route_cache_loop, daemon=True).start()
+
+
+def choose_llm_route() -> str:
+    with LLM_ROUTE_CACHE_LOCK:
+        cached = dict(LLM_ROUTE_CACHE)
+    log(
+        "llm route selected for session: "
+        f"{cached['route']} provider={cached['provider']} model={cached['model']} status={cached['status']}"
+    )
+    return str(cached["route"])
+
+
+def ask_gateway(text: str, llm_route: str | None = None) -> str:
+    payload: dict[str, str] = {"message": text}
+    if llm_route:
+        payload["llm_route"] = llm_route
     with httpx.Client(timeout=60.0) as client:
-        response = client.post(GATEWAY_URL, json={"message": text})
-        response.raise_for_status()
+        response = client.post(GATEWAY_URL, json=payload)
+        try:
+            response.raise_for_status()
+        except httpx.HTTPError as exc:
+            if llm_route == "online":
+                raise OnlineModelUnavailable(str(exc)) from exc
+            raise
         data: dict[str, Any] = response.json()
     return str(data.get("answer", "")).strip()
 
@@ -439,6 +507,7 @@ def handle_conversation_turn(
     voice: PiperVoice,
     tts_config: SynthesisConfig,
     display: DisplayClient,
+    llm_route: str | None = None,
 ) -> bool:
     if is_session_end(command):
         log(f"session end command: {command}")
@@ -449,7 +518,13 @@ def handle_conversation_turn(
     log(f"recognized command: {command}")
     display.set_state("thinking", command)
     try:
-        answer = ask_gateway(command)
+        answer = ask_gateway(command, llm_route)
+    except OnlineModelUnavailable as exc:
+        log(f"online model unavailable during session: {exc}")
+        display.set_state("error", "network unavailable")
+        speak_pausing_input(audio, NETWORK_UNAVAILABLE_RESPONSE, voice, tts_config, display)
+        display.set_state("idle")
+        return False
     except Exception as exc:
         log(f"gateway request failed: {exc}")
         display.set_state("error", "gateway unavailable")
@@ -470,6 +545,7 @@ def handle_wake(
     display: DisplayClient,
 ) -> None:
     log("wake detected")
+    llm_route = choose_llm_route()
     display.set_state("listening", "wake")
     speak_pausing_input(audio, WAKE_RESPONSE, voice, tts_config, display)
     drain_audio(audio, POST_RESPONSE_DRAIN_SECONDS)
@@ -491,7 +567,7 @@ def handle_wake(
             display.set_state("idle")
             return
 
-        if not handle_conversation_turn(audio, command, voice, tts_config, display):
+        if not handle_conversation_turn(audio, command, voice, tts_config, display, llm_route):
             return
         drain_audio(audio, POST_RESPONSE_DRAIN_SECONDS)
 
@@ -501,6 +577,7 @@ def handle_wake(
 
 
 def main() -> None:
+    start_llm_route_cache()
     input_device = select_input_device(INPUT_DEVICE)
     log(f"input device: {input_device if input_device is not None else 'default'}")
     log(f"output device: {OUTPUT_DEVICE}")

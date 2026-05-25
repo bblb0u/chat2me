@@ -25,6 +25,7 @@ from app.agent import (
     SESSION_IDLE_RESPONSE,
     WAKE_RESPONSE,
     DisplayClient,
+    choose_llm_route,
     create_asr,
     create_tts,
     drain_audio,
@@ -33,6 +34,7 @@ from app.agent import (
     log,
     select_input_device,
     speak_pausing_input,
+    start_llm_route_cache,
     write_beep,
 )
 
@@ -138,6 +140,7 @@ def run_session(recognizer, voice, tts_config, display: StatusClient, beep_path:
         device=input_device,
         blocksize=chunk,
     ) as audio:
+        llm_route = choose_llm_route()
         display.set_state("listening", "wake")
         speak_pausing_input(audio, WAKE_RESPONSE, voice, tts_config, display)
         drain_audio(audio, POST_RESPONSE_DRAIN_SECONDS)
@@ -151,7 +154,7 @@ def run_session(recognizer, voice, tts_config, display: StatusClient, beep_path:
                     speak_pausing_input(audio, SESSION_IDLE_RESPONSE, voice, tts_config, display)
                 display.set_state("idle")
                 return
-            if not handle_conversation_turn(audio, command, voice, tts_config, display):
+            if not handle_conversation_turn(audio, command, voice, tts_config, display, llm_route):
                 return
             drain_audio(audio, POST_RESPONSE_DRAIN_SECONDS)
 
@@ -163,6 +166,7 @@ def run_session(recognizer, voice, tts_config, display: StatusClient, beep_path:
 def main() -> None:
     log(f"gateway url: {GATEWAY_URL}")
     log(f"status url: {STATUS_URL}")
+    start_llm_route_cache()
     log(f"loading ASR model: {ASR_MODEL_DIR}")
     recognizer = create_asr()
     log("ASR model ready")
