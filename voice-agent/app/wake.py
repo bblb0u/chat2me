@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import os
 import sys
+import threading
 import time
+from http import HTTPStatus
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlencode
 
 import httpx
@@ -27,6 +30,32 @@ STATUS_URL = os.getenv("STATUS_URL", "http://chat2m-status:8091/state")
 STATUS_HEALTH_URL = os.getenv("STATUS_HEALTH_URL", STATUS_URL.rsplit("/", 1)[0] + "/health")
 STATUS_WAIT_URL = os.getenv("STATUS_WAIT_URL", STATUS_URL.rsplit("/", 1)[0] + "/wait")
 SPEECH_WAIT_LOG_SECONDS = float(os.getenv("SPEECH_WAIT_LOG_SECONDS", "30"))
+WAKE_HEALTH_HOST = os.getenv("WAKE_HEALTH_HOST", "127.0.0.1")
+WAKE_HEALTH_PORT = int(os.getenv("WAKE_HEALTH_PORT", "8092"))
+ready_event = threading.Event()
+
+
+class HealthHandler(BaseHTTPRequestHandler):
+    def log_message(self, format: str, *args: object) -> None:
+        return
+
+    def do_GET(self) -> None:
+        if self.path != "/health":
+            self.send_response(HTTPStatus.NOT_FOUND)
+            self.end_headers()
+            return
+        status = HTTPStatus.OK if ready_event.is_set() else HTTPStatus.SERVICE_UNAVAILABLE
+        body = b'{"ok":true}\n' if ready_event.is_set() else b'{"ok":false}\n'
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+
+def start_health_server() -> None:
+    server = ThreadingHTTPServer((WAKE_HEALTH_HOST, WAKE_HEALTH_PORT), HealthHandler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
 
 
 def post_json(url: str, payload: dict[str, str], timeout: float = 2.0) -> bool:
@@ -167,6 +196,7 @@ def wait_for_speech() -> None:
 
 
 def main() -> None:
+    start_health_server()
     wait_for_speech()
     input_device = select_input_device(INPUT_DEVICE)
     log(f"input device: {input_device if input_device is not None else 'default'}")
@@ -174,6 +204,7 @@ def main() -> None:
     kws = create_kws()
     chunk = int(0.1 * SAMPLE_RATE)
     set_state("idle")
+    ready_event.set()
 
     while True:
         stream = kws.create_stream()
