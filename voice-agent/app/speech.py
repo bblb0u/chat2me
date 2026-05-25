@@ -99,27 +99,33 @@ class WakeHandler(BaseHTTPRequestHandler):
             self.send_response(409)
             self.end_headers()
             return
-        try:
-            log("wake signal received")
-            run_session(
+        threading.Thread(
+            target=run_session_thread,
+            args=(
                 WakeHandler.recognizer,
                 WakeHandler.voice,
                 WakeHandler.tts_config,
                 WakeHandler.display,
                 WakeHandler.beep_path,
-            )
-            self.send_response(200)
-            self.end_headers()
-        except Exception as exc:
-            log(f"session failed: {exc}")
-            if WakeHandler.display is not None:
-                WakeHandler.display.set_state("error", str(exc))
-            self.send_response(500)
-            self.end_headers()
-        finally:
-            if WakeHandler.display is not None:
-                WakeHandler.display.set_state("idle")
-            WakeHandler.busy_lock.release()
+            ),
+            daemon=True,
+        ).start()
+        self.send_response(202)
+        self.end_headers()
+
+
+def run_session_thread(recognizer, voice, tts_config, display: StatusClient, beep_path: Path) -> None:
+    try:
+        log("wake signal received")
+        run_session(recognizer, voice, tts_config, display, beep_path)
+    except Exception as exc:
+        log(f"session failed: {exc}")
+        if display is not None:
+            display.set_state("error", str(exc))
+    finally:
+        if display is not None:
+            display.set_state("idle")
+        WakeHandler.busy_lock.release()
 
 
 def run_session(recognizer, voice, tts_config, display: StatusClient, beep_path: Path) -> None:

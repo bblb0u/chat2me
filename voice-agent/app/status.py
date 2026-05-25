@@ -7,6 +7,7 @@ import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qs, urlparse
 
 from app.agent import DisplayClient, log
 
@@ -36,16 +37,46 @@ def resolve_display_port(port: str) -> str:
 
 display_port = resolve_display_port(DISPLAY_SERIAL_PORT)
 display = DisplayClient(display_port, DISPLAY_SERIAL_BAUD)
-state_lock = threading.Lock()
-last_state = {"state": "idle", "text": ""}
+state_lock = threading.Condition()
+last_state = {
+    "state": "idle",
+    "text": "",
+    "seq": 0,
+    "changed_at": time.time(),
+    "non_idle_seq": 0,
+}
 
 
 def set_state(state: str, text: str = "") -> None:
     with state_lock:
+        seq = int(last_state["seq"]) + 1
         last_state["state"] = state
         last_state["text"] = text
+        last_state["seq"] = seq
+        last_state["changed_at"] = time.time()
+        if state != "idle":
+            last_state["non_idle_seq"] = seq
+        state_lock.notify_all()
     display.set_state(state, text)
     log(f"display state: {state}")
+
+
+def parse_int(value: str | None) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except ValueError:
+        return None
+
+
+def parse_timeout(value: str | None) -> float | None:
+    if value is None:
+        return None
+    try:
+        return min(max(float(value), 0.0), 86400.0)
+    except ValueError:
+        return 3600.0
 
 
 class StatusHandler(BaseHTTPRequestHandler):
@@ -61,12 +92,42 @@ class StatusHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self) -> None:
-        if self.path != "/health":
+        parsed = urlparse(self.path)
+        if parsed.path == "/health":
+            with state_lock:
+                state = dict(last_state)
+            self._send_json(200, {"ok": True, "display": bool(display_port), "port": display_port, **state})
+            return
+        if parsed.path == "/wait":
+            self._wait_state(parse_qs(parsed.query))
+            return
+        else:
             self._send_json(404, {"error": "not found"})
             return
+
+    def _wait_state(self, query: dict[str, list[str]]) -> None:
+        after_seq = parse_int(query.get("after_seq", [None])[0])
+        after_non_idle_seq = parse_int(query.get("after_non_idle_seq", [None])[0])
+        non_idle_seq_at_least = parse_int(query.get("non_idle_seq_at_least", [None])[0])
+        desired_state = query.get("state", [None])[0]
+        timeout = parse_timeout(query.get("timeout", [None])[0])
+
+        def matched() -> bool:
+            if after_seq is not None and int(last_state["seq"]) <= after_seq:
+                return False
+            if after_non_idle_seq is not None and int(last_state["non_idle_seq"]) <= after_non_idle_seq:
+                return False
+            if non_idle_seq_at_least is not None and int(last_state["non_idle_seq"]) < non_idle_seq_at_least:
+                return False
+            if desired_state is not None and last_state["state"] != desired_state:
+                return False
+            return True
+
         with state_lock:
+            ok = state_lock.wait_for(matched, timeout=timeout)
             state = dict(last_state)
-        self._send_json(200, {"ok": True, "display": bool(display_port), "port": display_port, **state})
+        status = 200 if ok else 408
+        self._send_json(status, {"ok": ok, "display": bool(display_port), "port": display_port, **state})
 
     def do_POST(self) -> None:
         if self.path != "/state":
