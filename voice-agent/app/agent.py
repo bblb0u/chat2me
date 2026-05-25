@@ -43,22 +43,17 @@ MODELS_DIR = Path(os.getenv("MODELS_DIR", "/models"))
 VOICE_KWS_MODEL_NAME = os.getenv("VOICE_KWS_MODEL_NAME", "sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20")
 VOICE_ASR_MODEL_NAME = os.getenv("VOICE_ASR_MODEL_NAME", "sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20")
 VOICE_PIPER_MODEL_NAME = os.getenv("VOICE_PIPER_MODEL_NAME", "zh_CN-huayan-medium")
-KWS_MODEL_DIR = Path(
-    os.getenv("KWS_MODEL_DIR", str(MODELS_DIR / VOICE_KWS_MODEL_NAME))
-)
-ASR_MODEL_DIR = Path(
-    os.getenv("ASR_MODEL_DIR", str(MODELS_DIR / VOICE_ASR_MODEL_NAME))
-)
-KEYWORDS_RAW = Path(os.getenv("KEYWORDS_RAW", str(MODELS_DIR / "wake_words_raw.txt")))
+KWS_MODEL_DIR = MODELS_DIR / VOICE_KWS_MODEL_NAME
+ASR_MODEL_DIR = MODELS_DIR / VOICE_ASR_MODEL_NAME
 GENERATED_KEYWORDS_FILE = MODELS_DIR / "wake_words.txt"
 GENERATED_KEYWORDS_RAW = MODELS_DIR / "wake_words_raw.txt"
-PRETOKENIZED_KEYWORDS_FILE = os.getenv("KEYWORDS_FILE", "")
 WAKE_WORDS_ENV = os.getenv("WAKE_WORDS", "")
+DEFAULT_WAKE_WORDS = ("嗨小江", "嘿小江", "小江")
 WAKE_WORDS = tuple(
     word.strip()
     for word in WAKE_WORDS_ENV.split(",")
     if word.strip()
-)
+) or DEFAULT_WAKE_WORDS
 
 GATEWAY_URL = os.getenv("GATEWAY_URL", "http://chat2m-gateway:8080/chat")
 DISPLAY_SERIAL_PORT = os.getenv("DISPLAY_SERIAL_PORT", "")
@@ -78,8 +73,8 @@ PRE_BEEP_DRAIN_SECONDS = float(os.getenv("PRE_BEEP_DRAIN_SECONDS", "0.05"))
 POST_BEEP_DRAIN_SECONDS = float(os.getenv("POST_BEEP_DRAIN_SECONDS", "0.05"))
 POST_RESPONSE_DRAIN_SECONDS = float(os.getenv("POST_RESPONSE_DRAIN_SECONDS", "0.5"))
 SPEECH_RMS_THRESHOLD = float(os.getenv("SPEECH_RMS_THRESHOLD", "0.006"))
-PIPER_MODEL = Path(os.getenv("PIPER_MODEL", str(MODELS_DIR / "piper" / VOICE_PIPER_MODEL_NAME / "model.onnx")))
-PIPER_CONFIG = Path(os.getenv("PIPER_CONFIG", str(PIPER_MODEL) + ".json"))
+PIPER_MODEL = MODELS_DIR / "piper" / VOICE_PIPER_MODEL_NAME / "model.onnx"
+PIPER_CONFIG = Path(str(PIPER_MODEL) + ".json")
 PIPER_SPEAKER = int(os.getenv("PIPER_SPEAKER", "0"))
 PIPER_LENGTH_SCALE = float(os.getenv("PIPER_LENGTH_SCALE", "0.9"))
 PIPER_NOISE_SCALE = float(os.getenv("PIPER_NOISE_SCALE", "0.667"))
@@ -156,16 +151,7 @@ class DisplayClient:
 
 
 def wake_words_display() -> str:
-    if WAKE_WORDS:
-        return " / ".join(WAKE_WORDS)
-    if KEYWORDS_RAW.is_file():
-        labels = []
-        for line in KEYWORDS_RAW.read_text(encoding="utf-8").splitlines():
-            if "@" in line:
-                labels.append(line.rsplit("@", 1)[-1].strip())
-        if labels:
-            return " / ".join(labels)
-    return "未配置"
+    return " / ".join(WAKE_WORDS)
 
 
 def select_input_device(selector: str) -> int | str | None:
@@ -188,20 +174,9 @@ def ensure_keywords_file() -> Path:
     require_file(KWS_MODEL_DIR / "tokens.txt")
     require_file(KWS_MODEL_DIR / "en.phone")
 
-    if PRETOKENIZED_KEYWORDS_FILE:
-        keywords_file = Path(PRETOKENIZED_KEYWORDS_FILE)
-        require_file(keywords_file)
-        return keywords_file
-
-    raw_file = KEYWORDS_RAW
-    if WAKE_WORDS:
-        raw_file = GENERATED_KEYWORDS_RAW
-        raw_file.parent.mkdir(parents=True, exist_ok=True)
-        raw_file.write_text("".join(f"{word} @{word}\n" for word in WAKE_WORDS), encoding="utf-8")
-
-    if not raw_file.is_file():
-        raw_file.parent.mkdir(parents=True, exist_ok=True)
-        raw_file.write_text("嗨小江 @嗨小江\n嘿小江 @嘿小江\n小江 @小江\n", encoding="utf-8")
+    raw_file = GENERATED_KEYWORDS_RAW
+    raw_file.parent.mkdir(parents=True, exist_ok=True)
+    raw_file.write_text("".join(f"{word} @{word}\n" for word in WAKE_WORDS), encoding="utf-8")
 
     keywords_file = GENERATED_KEYWORDS_FILE
     keywords_file.parent.mkdir(parents=True, exist_ok=True)
