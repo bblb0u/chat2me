@@ -63,6 +63,52 @@ init_config() {
   done
 }
 
+sync_runtime_env_defaults() {
+  default_runtime="$DEFAULT_CONFIG_DIR/runtime.env"
+  target_runtime="$RUNTIME_CONFIG_PATH"
+  [ -f "$default_runtime" ] || return 0
+  [ -f "$target_runtime" ] || return 0
+  [ -w "$target_runtime" ] || return 0
+
+  sync_lock_dir="$CONFIG_DIR/.runtime-env-sync.lock"
+  sync_lock_waited=0
+  while ! mkdir "$sync_lock_dir" 2>/dev/null; do
+    sleep 1
+    sync_lock_waited=$((sync_lock_waited + 1))
+    if [ "$sync_lock_waited" -ge 60 ]; then
+      echo "Removing stale runtime config sync lock: $sync_lock_dir" >&2
+      rmdir "$sync_lock_dir" 2>/dev/null || true
+      sync_lock_waited=0
+    fi
+  done
+  trap 'rmdir "$sync_lock_dir" 2>/dev/null || true' EXIT
+
+  appended=0
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+      ''|\#*) continue ;;
+      *=*) ;;
+      *) continue ;;
+    esac
+    key="${line%%=*}"
+    case "$key" in
+      ''|*[!A-Za-z0-9_]*) continue ;;
+    esac
+
+    if ! grep -Eq "^[[:space:]]*$key[[:space:]]*=" "$target_runtime"; then
+      if [ "$appended" -eq 0 ]; then
+        printf '\n# Added by Chat2M image defaults. Existing values are never overwritten.\n' >> "$target_runtime"
+        appended=1
+      fi
+      printf '%s\n' "$line" >> "$target_runtime"
+      echo "Added missing runtime config: $key"
+    fi
+  done < "$default_runtime"
+
+  rmdir "$sync_lock_dir"
+  trap - EXIT
+}
+
 required_files_ok() {
   for required_file in "$@"; do
     if [ ! -s "$required_file" ]; then
@@ -338,17 +384,18 @@ ensure_piper_model() {
 }
 
 init_config
+sync_runtime_env_defaults
 load_runtime_env
 
 VOICE_MODELS_REQUIRED="${VOICE_MODELS_REQUIRED:-1}"
 VOICE_ROLE="${VOICE_ROLE:-}"
-VOICE_KWS_MODEL_NAME="${VOICE_KWS_MODEL_NAME:-sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20}"
-VOICE_KWS_MODEL_URL="${VOICE_KWS_MODEL_URL:-https://github.com/k2-fsa/sherpa-onnx/releases/download/kws-models/sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20.tar.bz2}"
-VOICE_ASR_MODEL_NAME="${VOICE_ASR_MODEL_NAME:-sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20}"
-VOICE_ASR_MODEL_URL="${VOICE_ASR_MODEL_URL:-https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20.tar.bz2}"
-VOICE_PIPER_MODEL_NAME="${VOICE_PIPER_MODEL_NAME:-zh_CN-huayan-medium}"
-VOICE_PIPER_MODEL_URL="${VOICE_PIPER_MODEL_URL:-https://huggingface.co/rhasspy/piper-voices/resolve/main/zh/zh_CN/huayan/medium/zh_CN-huayan-medium.onnx}"
-VOICE_PIPER_CONFIG_URL="${VOICE_PIPER_CONFIG_URL:-https://huggingface.co/rhasspy/piper-voices/resolve/main/zh/zh_CN/huayan/medium/zh_CN-huayan-medium.onnx.json}"
+: "${VOICE_KWS_MODEL_NAME:?VOICE_KWS_MODEL_NAME must be set in runtime.env}"
+: "${VOICE_KWS_MODEL_URL:?VOICE_KWS_MODEL_URL must be set in runtime.env}"
+: "${VOICE_ASR_MODEL_NAME:?VOICE_ASR_MODEL_NAME must be set in runtime.env}"
+: "${VOICE_ASR_MODEL_URL:?VOICE_ASR_MODEL_URL must be set in runtime.env}"
+: "${VOICE_PIPER_MODEL_NAME:?VOICE_PIPER_MODEL_NAME must be set in runtime.env}"
+: "${VOICE_PIPER_MODEL_URL:?VOICE_PIPER_MODEL_URL must be set in runtime.env}"
+: "${VOICE_PIPER_CONFIG_URL:?VOICE_PIPER_CONFIG_URL must be set in runtime.env}"
 KWS_MODEL="$MODELS_DIR/$VOICE_KWS_MODEL_NAME"
 ASR_MODEL="$MODELS_DIR/$VOICE_ASR_MODEL_NAME"
 PIPER_DIR="$MODELS_DIR/piper/$VOICE_PIPER_MODEL_NAME"

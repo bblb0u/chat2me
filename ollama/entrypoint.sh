@@ -21,6 +21,52 @@ init_config() {
   done
 }
 
+sync_runtime_env_defaults() {
+  default_runtime="$DEFAULT_CONFIG_DIR/runtime.env"
+  target_runtime="$RUNTIME_CONFIG_PATH"
+  [ -f "$default_runtime" ] || return 0
+  [ -f "$target_runtime" ] || return 0
+  [ -w "$target_runtime" ] || return 0
+
+  sync_lock_dir="$CONFIG_DIR/.runtime-env-sync.lock"
+  sync_lock_waited=0
+  while ! mkdir "$sync_lock_dir" 2>/dev/null; do
+    sleep 1
+    sync_lock_waited=$((sync_lock_waited + 1))
+    if [ "$sync_lock_waited" -ge 60 ]; then
+      echo "Removing stale runtime config sync lock: $sync_lock_dir" >&2
+      rmdir "$sync_lock_dir" 2>/dev/null || true
+      sync_lock_waited=0
+    fi
+  done
+  trap 'rmdir "$sync_lock_dir" 2>/dev/null || true' EXIT
+
+  appended=0
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+      ''|\#*) continue ;;
+      *=*) ;;
+      *) continue ;;
+    esac
+    key="${line%%=*}"
+    case "$key" in
+      ''|*[!A-Za-z0-9_]*) continue ;;
+    esac
+
+    if ! grep -Eq "^[[:space:]]*$key[[:space:]]*=" "$target_runtime"; then
+      if [ "$appended" -eq 0 ]; then
+        printf '\n# Added by Chat2M image defaults. Existing values are never overwritten.\n' >> "$target_runtime"
+        appended=1
+      fi
+      printf '%s\n' "$line" >> "$target_runtime"
+      echo "Added missing runtime config: $key"
+    fi
+  done < "$default_runtime"
+
+  rmdir "$sync_lock_dir"
+  trap - EXIT
+}
+
 load_runtime_env() {
   [ -f "$RUNTIME_CONFIG_PATH" ] || return
 
@@ -128,8 +174,10 @@ pull_model_with_progress() {
 }
 
 init_config
+sync_runtime_env_defaults
 load_runtime_env
-MODEL="${OLLAMA_MODEL:-qwen3:4b-instruct}"
+: "${OLLAMA_MODEL:?OLLAMA_MODEL must be set in runtime.env}"
+MODEL="$OLLAMA_MODEL"
 
 model_ok() {
   /bin/ollama show "$MODEL" >/dev/null 2>&1 \

@@ -2,7 +2,7 @@
 
 这个仓库当前先落地项目规划里的“对话路由”最小闭环：
 
-- `ollama` 容器运行本地小模型，默认 `qwen3:4b-instruct`；也可以在 `runtime.env` 切到 OpenAI、DeepSeek 或自建 OpenAI-compatible 接口。
+- `ollama` 容器运行本地小模型；也可以在 `runtime.env` 切到任意 OpenAI-compatible 在线接口。
 - `chat2m-gateway` 容器提供 FastAPI 对话接口。
 - `chat2m-wake` 容器负责麦克风唤醒词监听。
 - `chat2m-speech` 容器负责离线 ASR、连续对话和本地 Piper TTS。
@@ -34,7 +34,7 @@ docker compose down
 ./scripts/start-local.sh
 ```
 
-默认模型使用 Qwen3 4B Instruct 非思考版，比 1.7B 和 `qwen2.5:3b` 更强，同时不会输出 `<think>` 思考块，更适合实时 TTS 语音播报。
+默认本地模型在 `config/runtime.env` 里配置为 Qwen3 4B Instruct 非思考版，比 1.7B 和 `qwen2.5:3b` 更强，同时不会输出 `<think>` 思考块，更适合实时 TTS 语音播报。
 
 ## 大模型配置
 
@@ -48,37 +48,31 @@ docker compose up -d --force-recreate ollama chat2m-gateway chat2m-speech chat2m
 
 ```env
 LLM_PROVIDER=ollama
-LLM_MODEL=qwen3:4b-instruct
+LLM_MODEL=
 OLLAMA_MODEL=qwen3:4b-instruct
 ```
 
-OpenAI：
+OpenAI-compatible 在线接口：
 
 ```env
-LLM_PROVIDER=openai
+LLM_PROVIDER=remote
+LLM_BASE_URL=https://api.openai.com/v1
 LLM_MODEL=gpt-5-mini
 LLM_API_KEY=sk-...
 OLLAMA_MODEL=qwen3:4b-instruct
 ```
 
-DeepSeek：
+如果要用 DeepSeek 或自建模型，只改地址、模型名和密钥：
 
 ```env
-LLM_PROVIDER=deepseek
-LLM_MODEL=deepseek-v4-flash
+LLM_PROVIDER=remote
+LLM_BASE_URL=https://api.deepseek.com
+LLM_MODEL=deepseek-chat
 LLM_API_KEY=sk-...
 OLLAMA_MODEL=qwen3:4b-instruct
 ```
 
-自建或第三方 OpenAI-compatible 服务：
-
-```env
-LLM_PROVIDER=openai_compatible
-LLM_BASE_URL=http://192.168.1.10:8000/v1
-LLM_MODEL=your-model-name
-LLM_API_KEY=your-api-key
-OLLAMA_MODEL=qwen3:4b-instruct
-```
+`LLM_PROVIDER=ollama` 或 `local` 表示本地；其他任意值都表示在线接口。代码不会内置 OpenAI、DeepSeek 或其他供应商地址，实际调用只看 `LLM_BASE_URL`、`LLM_MODEL`、`LLM_API_KEY`。
 
 屏蔽词、固定问答和 `system_prompt` 仍然由 `chat2m-gateway` 统一处理。切换 provider 只替换最终生成答案的大模型后端；输入会先过 `safety.yaml` 和 `profile.yaml`，模型输出后也会再过一次屏蔽词检查。
 

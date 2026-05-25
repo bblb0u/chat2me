@@ -17,6 +17,7 @@ from app.agent import (
     KWS_MODEL_DIR,
     SAMPLE_RATE,
     create_kws,
+    env_float,
     log,
     read_mono,
     select_input_device,
@@ -29,7 +30,7 @@ SPEECH_HEALTH_URL = os.getenv("SPEECH_HEALTH_URL", SPEECH_WAKE_URL.rsplit("/", 1
 STATUS_URL = os.getenv("STATUS_URL", "http://chat2m-status:8091/state")
 STATUS_HEALTH_URL = os.getenv("STATUS_HEALTH_URL", STATUS_URL.rsplit("/", 1)[0] + "/health")
 STATUS_WAIT_URL = os.getenv("STATUS_WAIT_URL", STATUS_URL.rsplit("/", 1)[0] + "/wait")
-SPEECH_WAIT_LOG_SECONDS = float(os.getenv("SPEECH_WAIT_LOG_SECONDS", "30"))
+SPEECH_WAIT_LOG_SECONDS = env_float("SPEECH_WAIT_LOG_SECONDS")
 WAKE_HEALTH_HOST = os.getenv("WAKE_HEALTH_HOST", "127.0.0.1")
 WAKE_HEALTH_PORT = int(os.getenv("WAKE_HEALTH_PORT", "8092"))
 ready_event = threading.Event()

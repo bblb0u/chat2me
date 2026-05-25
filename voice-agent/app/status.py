@@ -9,20 +9,17 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
-from app.agent import DisplayClient, log
+from app.agent import DisplayClient, env_float, env_int, env_value, log
 
 
-DISPLAY_SERIAL_PORT = os.getenv("DISPLAY_SERIAL_PORT", "")
+DISPLAY_SERIAL_PORT = env_value("DISPLAY_SERIAL_PORT", allow_empty=True)
 DISPLAY_SERIAL_CANDIDATES = tuple(
     candidate.strip()
-    for candidate in os.getenv(
-        "DISPLAY_SERIAL_CANDIDATES",
-        "/dev/ttyACM0,/dev/ttyACM1,/dev/ttyUSB0,/dev/ttyUSB1",
-    ).split(",")
+    for candidate in env_value("DISPLAY_SERIAL_CANDIDATES").split(",")
     if candidate.strip()
 )
-DISPLAY_SERIAL_BAUD = int(os.getenv("DISPLAY_SERIAL_BAUD", "115200"))
-DISPLAY_SYNC_SECONDS = float(os.getenv("DISPLAY_SYNC_SECONDS", "1.0"))
+DISPLAY_SERIAL_BAUD = env_int("DISPLAY_SERIAL_BAUD")
+DISPLAY_SYNC_SECONDS = env_float("DISPLAY_SYNC_SECONDS")
 STATUS_HOST = os.getenv("STATUS_HOST", "0.0.0.0")
 STATUS_PORT = int(os.getenv("STATUS_PORT", "8091"))
 

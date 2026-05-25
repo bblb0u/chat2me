@@ -39,63 +39,96 @@ def load_runtime_env() -> None:
 
 load_runtime_env()
 
+
+def env_value(key: str, *, allow_empty: bool = False) -> str:
+    value = os.getenv(key)
+    if value is None:
+        raise RuntimeError(f"{key} must be set in runtime.env")
+    value = value.strip()
+    if not allow_empty and not value:
+        raise RuntimeError(f"{key} must not be empty in runtime.env")
+    return value
+
+
+def env_int(key: str) -> int:
+    value = env_value(key)
+    try:
+        return int(value)
+    except ValueError:
+        raise RuntimeError(f"{key} must be an integer in runtime.env") from None
+
+
+def env_float(key: str) -> float:
+    value = env_value(key)
+    try:
+        return float(value)
+    except ValueError:
+        raise RuntimeError(f"{key} must be a number in runtime.env") from None
+
+
 MODELS_DIR = Path(os.getenv("MODELS_DIR", "/models"))
-VOICE_KWS_MODEL_NAME = os.getenv("VOICE_KWS_MODEL_NAME", "sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20")
-VOICE_ASR_MODEL_NAME = os.getenv("VOICE_ASR_MODEL_NAME", "sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20")
-VOICE_PIPER_MODEL_NAME = os.getenv("VOICE_PIPER_MODEL_NAME", "zh_CN-huayan-medium")
+VOICE_KWS_MODEL_NAME = env_value("VOICE_KWS_MODEL_NAME")
+VOICE_ASR_MODEL_NAME = env_value("VOICE_ASR_MODEL_NAME")
+VOICE_PIPER_MODEL_NAME = env_value("VOICE_PIPER_MODEL_NAME")
 KWS_MODEL_DIR = MODELS_DIR / VOICE_KWS_MODEL_NAME
 ASR_MODEL_DIR = MODELS_DIR / VOICE_ASR_MODEL_NAME
 GENERATED_KEYWORDS_FILE = MODELS_DIR / "wake_words.txt"
 GENERATED_KEYWORDS_RAW = MODELS_DIR / "wake_words_raw.txt"
-WAKE_WORDS_ENV = os.getenv("WAKE_WORDS", "")
-DEFAULT_WAKE_WORDS = ("嗨小江", "嘿小江", "小江")
+WAKE_WORDS_ENV = env_value("WAKE_WORDS")
 WAKE_WORDS = tuple(
     word.strip()
     for word in WAKE_WORDS_ENV.split(",")
     if word.strip()
-) or DEFAULT_WAKE_WORDS
+)
+if not WAKE_WORDS:
+    raise RuntimeError("WAKE_WORDS must contain at least one wake word in runtime.env")
 
 GATEWAY_URL = os.getenv("GATEWAY_URL", "http://chat2m-gateway:8080/chat")
 GATEWAY_REACHABILITY_URL = os.getenv("GATEWAY_REACHABILITY_URL", GATEWAY_URL.rsplit("/", 1)[0] + "/llm/reachability")
-NETWORK_UNAVAILABLE_RESPONSE = os.getenv("NETWORK_UNAVAILABLE_RESPONSE", "网络连接不可用")
-LLM_ROUTE_CACHE_INTERVAL_SECONDS = float(os.getenv("LLM_ROUTE_CACHE_INTERVAL_SECONDS", "2"))
-DISPLAY_SERIAL_PORT = os.getenv("DISPLAY_SERIAL_PORT", "")
-DISPLAY_SERIAL_BAUD = int(os.getenv("DISPLAY_SERIAL_BAUD", "115200"))
-INPUT_DEVICE = os.getenv("AUDIO_INPUT_DEVICE", "ReSpeaker")
-OUTPUT_DEVICE = os.getenv("AUDIO_OUTPUT_DEVICE", "default")
-SAMPLE_RATE = int(os.getenv("AUDIO_SAMPLE_RATE", "16000"))
-INPUT_CHANNELS = int(os.getenv("AUDIO_INPUT_CHANNELS", "1"))
-INPUT_CHANNEL_INDEX = int(os.getenv("AUDIO_INPUT_CHANNEL_INDEX", "0"))
-KWS_THREADS = int(os.getenv("KWS_THREADS", "1"))
-ASR_THREADS = int(os.getenv("ASR_THREADS", "2"))
-COMMAND_TIMEOUT_SECONDS = float(os.getenv("COMMAND_TIMEOUT_SECONDS", "10"))
-COMMAND_MIN_SECONDS = float(os.getenv("COMMAND_MIN_SECONDS", "1.8"))
-COMMAND_LEADING_SILENCE_SECONDS = float(os.getenv("COMMAND_LEADING_SILENCE_SECONDS", "4.0"))
-COMMAND_INITIAL_GRACE_SECONDS = float(os.getenv("COMMAND_INITIAL_GRACE_SECONDS", "1.2"))
-PRE_BEEP_DRAIN_SECONDS = float(os.getenv("PRE_BEEP_DRAIN_SECONDS", "0.05"))
-POST_BEEP_DRAIN_SECONDS = float(os.getenv("POST_BEEP_DRAIN_SECONDS", "0.05"))
-POST_RESPONSE_DRAIN_SECONDS = float(os.getenv("POST_RESPONSE_DRAIN_SECONDS", "0.5"))
-SPEECH_RMS_THRESHOLD = float(os.getenv("SPEECH_RMS_THRESHOLD", "0.006"))
+NETWORK_UNAVAILABLE_RESPONSE = env_value("NETWORK_UNAVAILABLE_RESPONSE")
+LLM_ROUTE_CACHE_INTERVAL_SECONDS = env_float("LLM_ROUTE_CACHE_INTERVAL_SECONDS")
+DISPLAY_SERIAL_PORT = env_value("DISPLAY_SERIAL_PORT", allow_empty=True)
+DISPLAY_SERIAL_BAUD = env_int("DISPLAY_SERIAL_BAUD")
+INPUT_DEVICE = env_value("AUDIO_INPUT_DEVICE", allow_empty=True)
+OUTPUT_DEVICE = env_value("AUDIO_OUTPUT_DEVICE", allow_empty=True)
+SAMPLE_RATE = env_int("AUDIO_SAMPLE_RATE")
+INPUT_CHANNELS = env_int("AUDIO_INPUT_CHANNELS")
+INPUT_CHANNEL_INDEX = env_int("AUDIO_INPUT_CHANNEL_INDEX")
+KWS_THREADS = env_int("KWS_THREADS")
+ASR_THREADS = env_int("ASR_THREADS")
+COMMAND_TIMEOUT_SECONDS = env_float("COMMAND_TIMEOUT_SECONDS")
+COMMAND_MIN_SECONDS = env_float("COMMAND_MIN_SECONDS")
+COMMAND_LEADING_SILENCE_SECONDS = env_float("COMMAND_LEADING_SILENCE_SECONDS")
+COMMAND_INITIAL_GRACE_SECONDS = env_float("COMMAND_INITIAL_GRACE_SECONDS")
+PRE_BEEP_DRAIN_SECONDS = env_float("PRE_BEEP_DRAIN_SECONDS")
+POST_BEEP_DRAIN_SECONDS = env_float("POST_BEEP_DRAIN_SECONDS")
+POST_RESPONSE_DRAIN_SECONDS = env_float("POST_RESPONSE_DRAIN_SECONDS")
+SPEECH_RMS_THRESHOLD = env_float("SPEECH_RMS_THRESHOLD")
 PIPER_MODEL = MODELS_DIR / "piper" / VOICE_PIPER_MODEL_NAME / "model.onnx"
 PIPER_CONFIG = Path(str(PIPER_MODEL) + ".json")
-PIPER_SPEAKER = int(os.getenv("PIPER_SPEAKER", "0"))
-PIPER_LENGTH_SCALE = float(os.getenv("PIPER_LENGTH_SCALE", "0.9"))
-PIPER_NOISE_SCALE = float(os.getenv("PIPER_NOISE_SCALE", "0.667"))
-PIPER_NOISE_W_SCALE = float(os.getenv("PIPER_NOISE_W_SCALE", "0.8"))
-PIPER_VOLUME = float(os.getenv("PIPER_VOLUME", "1.0"))
-NO_COMMAND_RESPONSE = os.getenv("NO_COMMAND_RESPONSE", "请再说一遍")
-WAKE_RESPONSE = os.getenv("WAKE_RESPONSE", "有什么可以帮助您的")
-SESSION_IDLE_RESPONSE = os.getenv("SESSION_IDLE_RESPONSE", "")
-SESSION_END_RESPONSE = os.getenv("SESSION_END_RESPONSE", "好的，我先待机")
-MAX_SESSION_TURNS = int(os.getenv("MAX_SESSION_TURNS", "8"))
+PIPER_SPEAKER = env_int("PIPER_SPEAKER")
+PIPER_LENGTH_SCALE = env_float("PIPER_LENGTH_SCALE")
+PIPER_NOISE_SCALE = env_float("PIPER_NOISE_SCALE")
+PIPER_NOISE_W_SCALE = env_float("PIPER_NOISE_W_SCALE")
+PIPER_VOLUME = env_float("PIPER_VOLUME")
+NO_COMMAND_RESPONSE = env_value("NO_COMMAND_RESPONSE")
+WAKE_RESPONSE = env_value("WAKE_RESPONSE")
+SESSION_IDLE_RESPONSE = env_value("SESSION_IDLE_RESPONSE", allow_empty=True)
+SESSION_END_RESPONSE = env_value("SESSION_END_RESPONSE")
+SESSION_END_PHRASES_ENV = env_value("SESSION_END_PHRASES")
+MAX_SESSION_TURNS = env_int("MAX_SESSION_TURNS")
 SESSION_END_PHRASES = tuple(
     phrase.strip()
-    for phrase in os.getenv(
-        "SESSION_END_PHRASES",
-        "退出,结束,不用了,没事了,再见,拜拜,回到待机,退下,退下吧,你走吧,走吧,下去吧,可以了,先这样",
-    ).split(",")
+    for phrase in SESSION_END_PHRASES_ENV.split(",")
     if phrase.strip()
 )
+if not SESSION_END_PHRASES:
+    raise RuntimeError("SESSION_END_PHRASES must contain at least one phrase in runtime.env")
+KWS_KEYWORDS_SCORE = env_float("KWS_KEYWORDS_SCORE")
+KWS_KEYWORDS_THRESHOLD = env_float("KWS_KEYWORDS_THRESHOLD")
+ASR_RULE1_MIN_TRAILING_SILENCE = env_float("ASR_RULE1_MIN_TRAILING_SILENCE")
+ASR_RULE2_MIN_TRAILING_SILENCE = env_float("ASR_RULE2_MIN_TRAILING_SILENCE")
+ASR_RULE3_MIN_UTTERANCE_LENGTH = env_float("ASR_RULE3_MIN_UTTERANCE_LENGTH")
 LLM_ROUTE_CACHE = {
     "route": "local",
     "provider": "",
@@ -227,8 +260,8 @@ def create_kws() -> sherpa_onnx.KeywordSpotter:
         joiner=str(KWS_MODEL_DIR / "joiner-epoch-13-avg-2-chunk-8-left-64.int8.onnx"),
         num_threads=KWS_THREADS,
         keywords_file=str(keywords_file),
-        keywords_score=float(os.getenv("KWS_KEYWORDS_SCORE", "1.5")),
-        keywords_threshold=float(os.getenv("KWS_KEYWORDS_THRESHOLD", "0.25")),
+        keywords_score=KWS_KEYWORDS_SCORE,
+        keywords_threshold=KWS_KEYWORDS_THRESHOLD,
         provider="cpu",
     )
 
@@ -248,9 +281,9 @@ def create_asr() -> sherpa_onnx.OnlineRecognizer:
         sample_rate=SAMPLE_RATE,
         feature_dim=80,
         enable_endpoint_detection=True,
-        rule1_min_trailing_silence=float(os.getenv("ASR_RULE1_MIN_TRAILING_SILENCE", "1.8")),
-        rule2_min_trailing_silence=float(os.getenv("ASR_RULE2_MIN_TRAILING_SILENCE", "1.2")),
-        rule3_min_utterance_length=float(os.getenv("ASR_RULE3_MIN_UTTERANCE_LENGTH", "8")),
+        rule1_min_trailing_silence=ASR_RULE1_MIN_TRAILING_SILENCE,
+        rule2_min_trailing_silence=ASR_RULE2_MIN_TRAILING_SILENCE,
+        rule3_min_utterance_length=ASR_RULE3_MIN_UTTERANCE_LENGTH,
         decoding_method="greedy_search",
         provider="cpu",
     )

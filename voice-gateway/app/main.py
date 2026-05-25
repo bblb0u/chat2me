@@ -31,68 +31,55 @@ def load_runtime_env() -> None:
 
 load_runtime_env()
 
-DEFAULT_OLLAMA_MODEL = "qwen3:4b-instruct"
 FINAL_ANSWER_PROMPT = "只输出给用户听的最终答案，不要分析题目，不要复述用户问题，不要解释你的输出规则。"
-OPENAI_COMPATIBLE_PROVIDERS = {"openai", "deepseek", "openai_compatible"}
+LOCAL_LLM_PROVIDERS = {"ollama", "local"}
 
 
-def env_first(*keys: str, default: str = "") -> str:
-    for key in keys:
-        value = os.getenv(key)
-        if value is not None and value.strip():
-            return value.strip()
-    return default
-
-
-def env_float(key: str, default: float) -> float:
+def env_value(key: str, *, allow_empty: bool = False) -> str:
     value = os.getenv(key)
-    if value is None or not value.strip():
-        return default
+    if value is None:
+        raise RuntimeError(f"{key} must be set in runtime.env")
+    value = value.strip()
+    if not allow_empty and not value:
+        raise RuntimeError(f"{key} must not be empty in runtime.env")
+    return value
+
+
+def env_float(key: str) -> float:
+    value = env_value(key)
     try:
         return float(value)
     except ValueError:
-        return default
+        raise RuntimeError(f"{key} must be a number in runtime.env") from None
 
 
-def env_int(key: str, default: int) -> int:
-    value = os.getenv(key)
-    if value is None or not value.strip():
-        return default
+def env_int(key: str) -> int:
+    value = env_value(key)
     try:
         return int(value)
     except ValueError:
-        return default
+        raise RuntimeError(f"{key} must be an integer in runtime.env") from None
 
 
 def normalize_provider(value: str) -> str:
-    provider = value.strip().lower().replace("-", "_")
-    aliases = {
-        "": "ollama",
-        "local": "ollama",
-        "openai_compatible": "openai_compatible",
-        "compatible": "openai_compatible",
-        "custom": "openai_compatible",
-    }
-    return aliases.get(provider, provider)
+    return value.strip().lower().replace("-", "_")
 
 
-LLM_PROVIDER = normalize_provider(os.getenv("LLM_PROVIDER", "ollama"))
-OLLAMA_BASE_URL = env_first("OLLAMA_BASE_URL", default="http://ollama:11434").rstrip("/")
-OLLAMA_MODEL = env_first("OLLAMA_MODEL", default=DEFAULT_OLLAMA_MODEL)
-LLM_MODEL = (
-    env_first("LLM_MODEL", "OLLAMA_MODEL", default=OLLAMA_MODEL)
-    if LLM_PROVIDER == "ollama"
-    else env_first("LLM_MODEL")
-)
-LLM_TEMPERATURE = env_float("LLM_TEMPERATURE", 0.2)
-LLM_TOP_P = env_float("LLM_TOP_P", 0.9)
-LLM_MAX_TOKENS = env_int("LLM_MAX_TOKENS", 128)
-LLM_CONNECT_TIMEOUT_SECONDS = env_float("LLM_CONNECT_TIMEOUT_SECONDS", 5.0)
-LLM_TIMEOUT_SECONDS = env_float("LLM_TIMEOUT_SECONDS", 180.0)
-LLM_REACHABILITY_INTERVAL_SECONDS = env_float("LLM_REACHABILITY_INTERVAL_SECONDS", 5.0)
-LLM_REACHABILITY_TIMEOUT_SECONDS = env_float("LLM_REACHABILITY_TIMEOUT_SECONDS", 1.5)
-OLLAMA_NUM_CTX = env_int("OLLAMA_NUM_CTX", 2048)
-OLLAMA_NUM_THREAD = env_int("OLLAMA_NUM_THREAD", 8)
+LLM_PROVIDER = normalize_provider(env_value("LLM_PROVIDER"))
+OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://ollama:11434").strip().rstrip("/")
+OLLAMA_MODEL = env_value("OLLAMA_MODEL", allow_empty=True)
+LLM_MODEL = env_value("LLM_MODEL", allow_empty=True)
+LLM_BASE_URL = env_value("LLM_BASE_URL", allow_empty=True).rstrip("/")
+LLM_TEMPERATURE = env_float("LLM_TEMPERATURE")
+LLM_TOP_P = env_float("LLM_TOP_P")
+LLM_MAX_TOKENS = env_int("LLM_MAX_TOKENS")
+LLM_MAX_TOKENS_FIELD = env_value("LLM_MAX_TOKENS_FIELD", allow_empty=True)
+LLM_CONNECT_TIMEOUT_SECONDS = env_float("LLM_CONNECT_TIMEOUT_SECONDS")
+LLM_TIMEOUT_SECONDS = env_float("LLM_TIMEOUT_SECONDS")
+LLM_REACHABILITY_INTERVAL_SECONDS = env_float("LLM_REACHABILITY_INTERVAL_SECONDS")
+LLM_REACHABILITY_TIMEOUT_SECONDS = env_float("LLM_REACHABILITY_TIMEOUT_SECONDS")
+OLLAMA_NUM_CTX = env_int("OLLAMA_NUM_CTX")
+OLLAMA_NUM_THREAD = env_int("OLLAMA_NUM_THREAD")
 PROFILE_PATH = Path(os.getenv("PROFILE_PATH", "/app/config/profile.yaml"))
 SAFETY_PATH = Path(os.getenv("SAFETY_PATH", "/app/config/safety.yaml"))
 
@@ -224,14 +211,7 @@ def chat_messages(message: str) -> list[dict[str, str]]:
 
 
 def remote_base_url() -> str:
-    if LLM_PROVIDER == "openai":
-        base_url = env_first("LLM_BASE_URL", "LLM_API_BASE_URL", "OPENAI_BASE_URL", default="https://api.openai.com/v1")
-    elif LLM_PROVIDER == "deepseek":
-        base_url = env_first("LLM_BASE_URL", "LLM_API_BASE_URL", "DEEPSEEK_BASE_URL", default="https://api.deepseek.com")
-    else:
-        base_url = env_first("LLM_BASE_URL", "LLM_API_BASE_URL", "OPENAI_BASE_URL", "DEEPSEEK_BASE_URL")
-
-    base_url = base_url.rstrip("/")
+    base_url = LLM_BASE_URL
     suffix = "/chat/completions"
     if base_url.endswith(suffix):
         base_url = base_url[: -len(suffix)]
@@ -239,7 +219,7 @@ def remote_base_url() -> str:
 
 
 def remote_api_key() -> str:
-    return env_first("LLM_API_KEY")
+    return env_value("LLM_API_KEY", allow_empty=True)
 
 
 def remote_headers() -> dict[str, str]:
@@ -256,9 +236,21 @@ def require_remote_config() -> str:
     base_url = remote_base_url()
     if not base_url:
         raise LLMConfigError("远程大模型未配置 LLM_BASE_URL。")
-    if LLM_PROVIDER in {"openai", "deepseek"} and not remote_api_key():
-        raise LLMConfigError("远程大模型未配置 LLM_API_KEY。")
     return base_url
+
+
+def require_local_model() -> str:
+    if not OLLAMA_MODEL:
+        raise LLMConfigError("本地大模型未配置 OLLAMA_MODEL。")
+    return OLLAMA_MODEL
+
+
+def provider_is_local() -> bool:
+    return LLM_PROVIDER in LOCAL_LLM_PROVIDERS
+
+
+def provider_is_online() -> bool:
+    return bool(LLM_PROVIDER) and not provider_is_local()
 
 
 def extract_chat_completion_answer(data: dict[str, Any]) -> str:
@@ -311,7 +303,7 @@ async def call_ollama(message: str, model: str) -> str:
     return strip_thinking(str(answer))
 
 
-async def call_openai_compatible(message: str) -> str:
+async def call_remote_llm(message: str) -> str:
     base_url = require_remote_config()
     payload = {
         "model": LLM_MODEL,
@@ -320,10 +312,8 @@ async def call_openai_compatible(message: str) -> str:
         "temperature": LLM_TEMPERATURE,
         "top_p": LLM_TOP_P,
     }
-    if LLM_PROVIDER == "openai":
-        payload["max_completion_tokens"] = LLM_MAX_TOKENS
-    else:
-        payload["max_tokens"] = LLM_MAX_TOKENS
+    if LLM_MAX_TOKENS_FIELD:
+        payload[LLM_MAX_TOKENS_FIELD] = LLM_MAX_TOKENS
     timeout = httpx.Timeout(connect=LLM_CONNECT_TIMEOUT_SECONDS, read=LLM_TIMEOUT_SECONDS, write=10.0, pool=5.0)
     async with httpx.AsyncClient(timeout=timeout) as client:
         response = await client.post(f"{base_url}/chat/completions", headers=remote_headers(), json=payload)
@@ -345,22 +335,24 @@ def normalize_llm_route(route: str | None) -> str:
 async def call_llm(message: str, route: str | None = None) -> LLMResult:
     requested_route = normalize_llm_route(route)
     if requested_route == "local":
-        answer = await call_ollama(message, OLLAMA_MODEL)
-        return LLMResult(answer=answer, route="local", model=OLLAMA_MODEL)
+        model = require_local_model()
+        answer = await call_ollama(message, model)
+        return LLMResult(answer=answer, route="local", model=model)
 
     if requested_route == "online":
-        if LLM_PROVIDER not in OPENAI_COMPATIBLE_PROVIDERS:
+        if not provider_is_online():
             raise LLMConfigError("当前未配置在线大模型 provider。")
-        answer = await call_openai_compatible(message)
+        answer = await call_remote_llm(message)
         return LLMResult(answer=answer, route="online", model=LLM_MODEL)
 
-    if LLM_PROVIDER == "ollama":
-        answer = await call_ollama(message, LLM_MODEL)
-        return LLMResult(answer=answer, route="local", model=LLM_MODEL)
-    if LLM_PROVIDER in OPENAI_COMPATIBLE_PROVIDERS:
-        answer = await call_openai_compatible(message)
+    if provider_is_local():
+        model = require_local_model()
+        answer = await call_ollama(message, model)
+        return LLMResult(answer=answer, route="local", model=model)
+    if provider_is_online():
+        answer = await call_remote_llm(message)
         return LLMResult(answer=answer, route="online", model=LLM_MODEL)
-    raise LLMConfigError(f"不支持的 LLM_PROVIDER：{LLM_PROVIDER}")
+    raise LLMConfigError("未配置 LLM_PROVIDER。")
 
 
 async def check_ollama_health() -> str:
@@ -372,7 +364,7 @@ async def check_ollama_health() -> str:
         return "unreachable"
 
 
-async def probe_openai_compatible_health() -> LLMReachability:
+async def probe_remote_health() -> LLMReachability:
     try:
         base_url = require_remote_config()
     except LLMConfigError as exc:
@@ -392,16 +384,16 @@ async def remote_reachability_loop() -> None:
 
     interval = max(0.5, LLM_REACHABILITY_INTERVAL_SECONDS)
     while True:
-        REMOTE_REACHABILITY = await probe_openai_compatible_health()
+        REMOTE_REACHABILITY = await probe_remote_health()
         await asyncio.sleep(interval)
 
 
 @app.on_event("startup")
 async def start_remote_reachability_loop() -> None:
     global REMOTE_REACHABILITY_TASK
-    if LLM_PROVIDER in OPENAI_COMPATIBLE_PROVIDERS:
+    if provider_is_online():
         global REMOTE_REACHABILITY
-        REMOTE_REACHABILITY = await probe_openai_compatible_health()
+        REMOTE_REACHABILITY = await probe_remote_health()
         REMOTE_REACHABILITY_TASK = asyncio.create_task(remote_reachability_loop())
 
 
@@ -418,8 +410,13 @@ async def stop_remote_reachability_loop() -> None:
 
 @app.get("/llm/reachability", response_model=ReachabilityResponse)
 async def llm_reachability() -> ReachabilityResponse:
-    if LLM_PROVIDER not in OPENAI_COMPATIBLE_PROVIDERS:
-        return ReachabilityResponse(online=False, provider=LLM_PROVIDER, model=LLM_MODEL or None, status="online_provider_disabled")
+    if not provider_is_online():
+        return ReachabilityResponse(
+            online=False,
+            provider=LLM_PROVIDER or "unconfigured",
+            model=LLM_MODEL or None,
+            status="online_provider_disabled",
+        )
 
     reachability = REMOTE_REACHABILITY
     return ReachabilityResponse(
@@ -433,13 +430,13 @@ async def llm_reachability() -> ReachabilityResponse:
 
 @app.get("/health", response_model=HealthResponse)
 async def health() -> HealthResponse:
-    if LLM_PROVIDER == "ollama":
+    if provider_is_local():
         llm_status = await check_ollama_health()
         status = "ok" if llm_status == "ok" else "degraded"
-        return HealthResponse(status=status, provider=LLM_PROVIDER, model=LLM_MODEL, llm=llm_status, ollama=llm_status)
+        return HealthResponse(status=status, provider=LLM_PROVIDER, model=OLLAMA_MODEL or None, llm=llm_status, ollama=llm_status)
 
-    if LLM_PROVIDER in OPENAI_COMPATIBLE_PROVIDERS:
-        llm_reachability = await probe_openai_compatible_health()
+    if provider_is_online():
+        llm_reachability = await probe_remote_health()
         ollama_status = await check_ollama_health()
         status = "ok" if llm_reachability.online or ollama_status == "ok" else "degraded"
         return HealthResponse(
@@ -471,24 +468,24 @@ def model_not_found_detail(request: ChatRequest, detail: str) -> str:
         return detail
 
     route = request_route(request)
-    if route == "local" or (route == "auto" and LLM_PROVIDER == "ollama"):
-        return f"模型 {OLLAMA_MODEL} 还未下载完成，Ollama 容器会在后台自动拉取，请稍后重试。"
+    if route == "local" or (route == "auto" and provider_is_local()):
+        return f"模型 {OLLAMA_MODEL or '未配置'} 还未下载完成，Ollama 容器会在后台自动拉取，请稍后重试。"
     return detail
 
 
 def request_timeout_detail(request: ChatRequest) -> str:
     route = request_route(request)
-    if route == "local" or (route == "auto" and LLM_PROVIDER == "ollama"):
+    if route == "local" or (route == "auto" and provider_is_local()):
         return "Ollama 生成超时，建议先用固定问答或更短问题测试。"
-    return f"{LLM_PROVIDER} 生成超时，建议先用固定问答或更短问题测试。"
+    return "在线大模型生成超时，建议先用固定问答或更短问题测试。"
 
 
 def request_service_unavailable_detail(request: ChatRequest, exc: httpx.HTTPError) -> str:
     detail = str(exc) or exc.__class__.__name__
     route = request_route(request)
-    if route == "local" or (route == "auto" and LLM_PROVIDER == "ollama"):
+    if route == "local" or (route == "auto" and provider_is_local()):
         return f"Ollama 服务不可用：{detail}"
-    return f"{LLM_PROVIDER} 服务不可用：{detail}"
+    return f"在线大模型服务不可用：{detail}"
 
 
 @app.post("/chat", response_model=ChatResponse)
