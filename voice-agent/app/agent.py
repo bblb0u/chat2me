@@ -18,6 +18,7 @@ import httpx
 import numpy as np
 from piper.config import SynthesisConfig
 from piper.voice import PiperVoice
+import yaml
 import serial
 import sherpa_onnx
 import sounddevice as sd
@@ -89,7 +90,8 @@ KWS_MODEL_DIR = MODELS_DIR / VOICE_KWS_MODEL_NAME
 ASR_MODEL_DIR = MODELS_DIR / VOICE_ASR_MODEL_NAME
 GENERATED_KEYWORDS_FILE = MODELS_DIR / "wake_words.txt"
 GENERATED_KEYWORDS_RAW = MODELS_DIR / "wake_words_raw.txt"
-GENERATED_ASR_HOTWORDS_FILE = MODELS_DIR / "asr_hotwords.txt"
+HOTWORDS_PATH = Path("/app/config/hotwords.yaml")
+GENERATED_HOTWORDS_FILE = MODELS_DIR / "hotwords"
 WAKE_WORDS_ENV = env_value("WAKE_WORDS")
 WAKE_WORDS = tuple(
     word.strip()
@@ -125,8 +127,6 @@ ASR_MODEL_PRECISION = env_value("ASR_MODEL_PRECISION")
 ASR_DECODING_METHOD = env_value("ASR_DECODING_METHOD")
 ASR_MAX_ACTIVE_PATHS = env_int("ASR_MAX_ACTIVE_PATHS")
 ASR_MODELING_UNIT = env_value("ASR_MODELING_UNIT")
-ASR_HOTWORDS_ENV = env_value("ASR_HOTWORDS", allow_empty=True)
-ASR_HOTWORDS = tuple(word.strip() for word in ASR_HOTWORDS_ENV.split(",") if word.strip())
 ASR_HOTWORDS_SCORE = env_float("ASR_HOTWORDS_SCORE")
 GATEWAY_REQUEST_TIMEOUT_SECONDS = env_float("GATEWAY_REQUEST_TIMEOUT_SECONDS")
 GATEWAY_UNAVAILABLE_RESPONSE = env_value("GATEWAY_UNAVAILABLE_RESPONSE")
@@ -331,8 +331,19 @@ def asr_model_file(stem: str) -> Path:
     raise RuntimeError("ASR_MODEL_PRECISION must be fp32 or int8 in runtime.env")
 
 
-def ensure_asr_hotwords_file() -> str:
-    if not ASR_HOTWORDS:
+def ensure_hotwords_file() -> str:
+    if not HOTWORDS_PATH.is_file():
+        raise FileNotFoundError(f"missing hotwords file: {HOTWORDS_PATH}")
+
+    with HOTWORDS_PATH.open("r", encoding="utf-8") as file:
+        data = yaml.safe_load(file) or {}
+    if not isinstance(data, dict):
+        raise RuntimeError(f"hotwords file must be a YAML mapping: {HOTWORDS_PATH}")
+    raw_hotwords = data.get("hotwords", [])
+    if not isinstance(raw_hotwords, list):
+        raise RuntimeError(f"hotwords must be a YAML list: {HOTWORDS_PATH}")
+    hotwords = tuple(str(word).strip() for word in raw_hotwords if str(word).strip())
+    if not hotwords:
         return ""
 
     require_file(ASR_MODEL_DIR / "tokens.txt")
@@ -340,7 +351,7 @@ def ensure_asr_hotwords_file() -> str:
     bpe_model_arg = str(bpe_model) if bpe_model.is_file() else None
     try:
         tokenized = sherpa_onnx.text2token(
-            list(ASR_HOTWORDS),
+            list(hotwords),
             str(ASR_MODEL_DIR / "tokens.txt"),
             tokens_type=ASR_MODELING_UNIT,
             bpe_model=bpe_model_arg,
@@ -352,10 +363,10 @@ def ensure_asr_hotwords_file() -> str:
     if not lines:
         return ""
 
-    GENERATED_ASR_HOTWORDS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    GENERATED_ASR_HOTWORDS_FILE.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    log(f"ASR hotwords active: {' / '.join(ASR_HOTWORDS)}")
-    return str(GENERATED_ASR_HOTWORDS_FILE)
+    GENERATED_HOTWORDS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    GENERATED_HOTWORDS_FILE.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    log(f"ASR hotwords active: {' / '.join(hotwords)}")
+    return str(GENERATED_HOTWORDS_FILE)
 
 
 def create_asr() -> sherpa_onnx.OnlineRecognizer:
@@ -366,12 +377,12 @@ def create_asr() -> sherpa_onnx.OnlineRecognizer:
     require_file(encoder)
     require_file(decoder)
     require_file(joiner)
-    hotwords_file = ensure_asr_hotwords_file()
+    hotwords_file = ensure_hotwords_file()
     bpe_vocab = ASR_MODEL_DIR / "bpe.vocab"
     log(
         "ASR config: "
         f"precision={ASR_MODEL_PRECISION} decoding={ASR_DECODING_METHOD} "
-        f"max_active_paths={ASR_MAX_ACTIVE_PATHS} hotwords={len(ASR_HOTWORDS)}"
+        f"max_active_paths={ASR_MAX_ACTIVE_PATHS} hotwords={HOTWORDS_PATH}"
     )
 
     return sherpa_onnx.OnlineRecognizer.from_transducer(
