@@ -89,6 +89,7 @@ KWS_MODEL_DIR = MODELS_DIR / VOICE_KWS_MODEL_NAME
 ASR_MODEL_DIR = MODELS_DIR / VOICE_ASR_MODEL_NAME
 GENERATED_KEYWORDS_FILE = MODELS_DIR / "wake_words.txt"
 GENERATED_KEYWORDS_RAW = MODELS_DIR / "wake_words_raw.txt"
+GENERATED_ASR_HOTWORDS_FILE = MODELS_DIR / "asr_hotwords.txt"
 WAKE_WORDS_ENV = env_value("WAKE_WORDS")
 WAKE_WORDS = tuple(
     word.strip()
@@ -120,6 +121,13 @@ else:
         raise RuntimeError("AUDIO_INPUT_CHANNEL_INDEX must be an integer or auto in runtime.env") from None
 KWS_THREADS = env_int("KWS_THREADS")
 ASR_THREADS = env_int("ASR_THREADS")
+ASR_MODEL_PRECISION = env_value("ASR_MODEL_PRECISION")
+ASR_DECODING_METHOD = env_value("ASR_DECODING_METHOD")
+ASR_MAX_ACTIVE_PATHS = env_int("ASR_MAX_ACTIVE_PATHS")
+ASR_MODELING_UNIT = env_value("ASR_MODELING_UNIT")
+ASR_HOTWORDS_ENV = env_value("ASR_HOTWORDS", allow_empty=True)
+ASR_HOTWORDS = tuple(word.strip() for word in ASR_HOTWORDS_ENV.split(",") if word.strip())
+ASR_HOTWORDS_SCORE = env_float("ASR_HOTWORDS_SCORE")
 GATEWAY_REQUEST_TIMEOUT_SECONDS = env_float("GATEWAY_REQUEST_TIMEOUT_SECONDS")
 GATEWAY_UNAVAILABLE_RESPONSE = env_value("GATEWAY_UNAVAILABLE_RESPONSE")
 ASR_ERROR_RESPONSE = env_value("ASR_ERROR_RESPONSE")
@@ -314,17 +322,63 @@ def create_kws() -> sherpa_onnx.KeywordSpotter:
     )
 
 
+def asr_model_file(stem: str) -> Path:
+    precision = ASR_MODEL_PRECISION.strip().lower()
+    if precision in {"fp32", "float32", "full"}:
+        return ASR_MODEL_DIR / f"{stem}.onnx"
+    if precision in {"int8", "quantized"}:
+        return ASR_MODEL_DIR / f"{stem}.int8.onnx"
+    raise RuntimeError("ASR_MODEL_PRECISION must be fp32 or int8 in runtime.env")
+
+
+def ensure_asr_hotwords_file() -> str:
+    if not ASR_HOTWORDS:
+        return ""
+
+    require_file(ASR_MODEL_DIR / "tokens.txt")
+    bpe_model = ASR_MODEL_DIR / "bpe.model"
+    bpe_model_arg = str(bpe_model) if bpe_model.is_file() else None
+    try:
+        tokenized = sherpa_onnx.text2token(
+            list(ASR_HOTWORDS),
+            str(ASR_MODEL_DIR / "tokens.txt"),
+            tokens_type=ASR_MODELING_UNIT,
+            bpe_model=bpe_model_arg,
+        )
+    except Exception as exc:
+        raise RuntimeError(f"ASR hotword tokenization failed: {exc}") from exc
+
+    lines = [" ".join(str(token) for token in tokens) for tokens in tokenized if tokens]
+    if not lines:
+        return ""
+
+    GENERATED_ASR_HOTWORDS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    GENERATED_ASR_HOTWORDS_FILE.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    log(f"ASR hotwords active: {' / '.join(ASR_HOTWORDS)}")
+    return str(GENERATED_ASR_HOTWORDS_FILE)
+
+
 def create_asr() -> sherpa_onnx.OnlineRecognizer:
     require_file(ASR_MODEL_DIR / "tokens.txt")
-    require_file(ASR_MODEL_DIR / "encoder-epoch-99-avg-1.int8.onnx")
-    require_file(ASR_MODEL_DIR / "decoder-epoch-99-avg-1.int8.onnx")
-    require_file(ASR_MODEL_DIR / "joiner-epoch-99-avg-1.int8.onnx")
+    encoder = asr_model_file("encoder-epoch-99-avg-1")
+    decoder = asr_model_file("decoder-epoch-99-avg-1")
+    joiner = asr_model_file("joiner-epoch-99-avg-1")
+    require_file(encoder)
+    require_file(decoder)
+    require_file(joiner)
+    hotwords_file = ensure_asr_hotwords_file()
+    bpe_vocab = ASR_MODEL_DIR / "bpe.vocab"
+    log(
+        "ASR config: "
+        f"precision={ASR_MODEL_PRECISION} decoding={ASR_DECODING_METHOD} "
+        f"max_active_paths={ASR_MAX_ACTIVE_PATHS} hotwords={len(ASR_HOTWORDS)}"
+    )
 
     return sherpa_onnx.OnlineRecognizer.from_transducer(
         tokens=str(ASR_MODEL_DIR / "tokens.txt"),
-        encoder=str(ASR_MODEL_DIR / "encoder-epoch-99-avg-1.int8.onnx"),
-        decoder=str(ASR_MODEL_DIR / "decoder-epoch-99-avg-1.int8.onnx"),
-        joiner=str(ASR_MODEL_DIR / "joiner-epoch-99-avg-1.int8.onnx"),
+        encoder=str(encoder),
+        decoder=str(decoder),
+        joiner=str(joiner),
         num_threads=ASR_THREADS,
         sample_rate=SAMPLE_RATE,
         feature_dim=80,
@@ -332,7 +386,12 @@ def create_asr() -> sherpa_onnx.OnlineRecognizer:
         rule1_min_trailing_silence=ASR_RULE1_MIN_TRAILING_SILENCE,
         rule2_min_trailing_silence=ASR_RULE2_MIN_TRAILING_SILENCE,
         rule3_min_utterance_length=ASR_RULE3_MIN_UTTERANCE_LENGTH,
-        decoding_method="greedy_search",
+        decoding_method=ASR_DECODING_METHOD,
+        max_active_paths=ASR_MAX_ACTIVE_PATHS,
+        hotwords_file=hotwords_file,
+        hotwords_score=ASR_HOTWORDS_SCORE,
+        modeling_unit=ASR_MODELING_UNIT,
+        bpe_vocab=str(bpe_vocab) if bpe_vocab.is_file() else "",
         provider="cpu",
     )
 

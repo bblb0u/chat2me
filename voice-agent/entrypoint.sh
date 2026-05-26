@@ -187,22 +187,28 @@ PY
 }
 
 asr_runtime_ok() {
-  python3 - "$ASR_MODEL" "$AUDIO_SAMPLE_RATE" <<'PY'
+  python3 - "$ASR_MODEL" "$AUDIO_SAMPLE_RATE" "${ASR_MODEL_PRECISION:-fp32}" "${ASR_DECODING_METHOD:-modified_beam_search}" "${ASR_MAX_ACTIVE_PATHS:-8}" <<'PY'
 import sys
 import sherpa_onnx
 
 model_dir = sys.argv[1]
 sample_rate = int(sys.argv[2])
+precision = sys.argv[3].strip().lower()
+decoding_method = sys.argv[4]
+max_active_paths = int(sys.argv[5])
+suffix = ".int8.onnx" if precision in {"int8", "quantized"} else ".onnx"
 try:
     sherpa_onnx.OnlineRecognizer.from_transducer(
         tokens=f"{model_dir}/tokens.txt",
-        encoder=f"{model_dir}/encoder-epoch-99-avg-1.int8.onnx",
-        decoder=f"{model_dir}/decoder-epoch-99-avg-1.int8.onnx",
-        joiner=f"{model_dir}/joiner-epoch-99-avg-1.int8.onnx",
+        encoder=f"{model_dir}/encoder-epoch-99-avg-1{suffix}",
+        decoder=f"{model_dir}/decoder-epoch-99-avg-1{suffix}",
+        joiner=f"{model_dir}/joiner-epoch-99-avg-1{suffix}",
         num_threads=1,
         sample_rate=sample_rate,
         feature_dim=80,
         enable_endpoint_detection=True,
+        decoding_method=decoding_method,
+        max_active_paths=max_active_paths,
         provider="cpu",
     )
 except Exception as exc:
@@ -235,11 +241,16 @@ kws_model_ok() {
 }
 
 asr_model_ok() {
+  case "${ASR_MODEL_PRECISION:-fp32}" in
+    int8|quantized) asr_suffix=".int8.onnx" ;;
+    fp32|float32|full) asr_suffix=".onnx" ;;
+    *) echo "ASR_MODEL_PRECISION must be fp32 or int8" >&2; return 1 ;;
+  esac
   required_files_ok \
     "$ASR_MODEL/tokens.txt" \
-    "$ASR_MODEL/encoder-epoch-99-avg-1.int8.onnx" \
-    "$ASR_MODEL/decoder-epoch-99-avg-1.int8.onnx" \
-    "$ASR_MODEL/joiner-epoch-99-avg-1.int8.onnx" \
+    "$ASR_MODEL/encoder-epoch-99-avg-1$asr_suffix" \
+    "$ASR_MODEL/decoder-epoch-99-avg-1$asr_suffix" \
+    "$ASR_MODEL/joiner-epoch-99-avg-1$asr_suffix" \
     && asr_runtime_ok
 }
 
