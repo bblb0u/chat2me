@@ -6,7 +6,7 @@ import threading
 import time
 from typing import Any
 
-from app.agent import env_bool, env_float, env_value, log
+from app.runtime import env_bool, env_float, env_value, log
 
 try:
     import usb.core

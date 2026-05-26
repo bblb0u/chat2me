@@ -6,7 +6,6 @@ import threading
 import time
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlencode
 
 import httpx
 import sounddevice as sd
@@ -29,8 +28,6 @@ from app.agent import (
 SPEECH_WAKE_URL = os.getenv("SPEECH_WAKE_URL", "http://chat2m-speech:8090/wake")
 SPEECH_HEALTH_URL = os.getenv("SPEECH_HEALTH_URL", SPEECH_WAKE_URL.rsplit("/", 1)[0] + "/health")
 STATUS_URL = os.getenv("STATUS_URL", "http://chat2m-status:8091/state")
-STATUS_HEALTH_URL = os.getenv("STATUS_HEALTH_URL", STATUS_URL.rsplit("/", 1)[0] + "/health")
-STATUS_WAIT_URL = os.getenv("STATUS_WAIT_URL", STATUS_URL.rsplit("/", 1)[0] + "/wait")
 SPEECH_WAIT_LOG_SECONDS = env_float("SPEECH_WAIT_LOG_SECONDS")
 SPEECH_WAIT_POLL_SECONDS = env_float("SPEECH_WAIT_POLL_SECONDS")
 WAKE_HEALTH_HOST = os.getenv("WAKE_HEALTH_HOST", "127.0.0.1")
@@ -81,25 +78,16 @@ def set_idle() -> None:
     set_state("idle")
 
 
-def get_status(timeout: float = 1.0) -> dict[str, object] | None:
-    if not STATUS_HEALTH_URL:
+def get_speech_health(timeout: float = 1.0) -> dict[str, object] | None:
+    if not SPEECH_HEALTH_URL:
         return None
     try:
         with httpx.Client(timeout=timeout) as client:
-            response = client.get(STATUS_HEALTH_URL)
+            response = client.get(SPEECH_HEALTH_URL)
             response.raise_for_status()
             return response.json()
     except Exception:
         return None
-
-
-def wait_for_status() -> dict[str, object]:
-    while True:
-        status = get_status()
-        if status is not None:
-            return status
-        log(f"waiting for status service: {STATUS_HEALTH_URL}")
-        time.sleep(SPEECH_WAIT_POLL_SECONDS)
 
 
 def trigger_speech() -> int | None:
@@ -114,86 +102,42 @@ def trigger_speech() -> int | None:
         return None
 
 
-def int_value(value: object) -> int | None:
-    return value if isinstance(value, int) else None
-
-
-def status_wait(params: dict[str, object]) -> dict[str, object] | None:
-    if not STATUS_WAIT_URL:
-        return None
-    url = f"{STATUS_WAIT_URL}?{urlencode(params)}"
-    try:
-        with httpx.Client(timeout=None) as client:
-            response = client.get(url)
-            response.raise_for_status()
-            return response.json()
-    except Exception as exc:
-        log(f"status wait failed: {url}: {exc}")
-        return None
-
-
-def wait_for_status_change(start_non_idle_seq: int | None) -> int | None:
-    params: dict[str, object] = {}
-    if start_non_idle_seq is not None:
-        params["after_non_idle_seq"] = start_non_idle_seq
-    while True:
-        log(f"waiting for speech session state: {STATUS_WAIT_URL}")
-        status = status_wait(params)
-        if status is not None:
-            non_idle_seq = int_value(status.get("non_idle_seq"))
-            state = str(status.get("state", ""))
-            if non_idle_seq is not None and (start_non_idle_seq is None or non_idle_seq > start_non_idle_seq):
-                log(f"speech session state observed: {state}")
-                return non_idle_seq
-
-        time.sleep(SPEECH_WAIT_POLL_SECONDS)
-
-
-def wait_for_status_idle(start_non_idle_seq: int | None) -> None:
-    params: dict[str, object] = {"state": "idle"}
-    if start_non_idle_seq is not None:
-        params["non_idle_seq_at_least"] = start_non_idle_seq
-    while True:
-        log(f"waiting for speech session to finish: {STATUS_WAIT_URL}")
-        status = status_wait(params)
-        if status is not None:
-            non_idle_seq = int_value(status.get("non_idle_seq"))
-            state = str(status.get("state", ""))
-            if (
-                non_idle_seq is not None
-                and (start_non_idle_seq is None or non_idle_seq >= start_non_idle_seq)
-                and state == "idle"
-            ):
-                log(f"speech session finished with state: {state}")
-                return
-
-        time.sleep(SPEECH_WAIT_POLL_SECONDS)
-
-
-def status_is_busy(status: dict[str, object] | None) -> bool:
-    if status is None:
-        return False
-    state = str(status.get("state", ""))
-    return bool(state and state != "idle")
-
-
 def wait_for_speech() -> None:
     last_log = 0.0
     set_state("waiting", "speech")
     while True:
-        try:
-            with httpx.Client(timeout=2.0) as client:
-                response = client.get(SPEECH_HEALTH_URL)
-                if response.is_success:
-                    log("speech service is online")
-                    set_state("idle")
-                    return
-        except Exception:
-            pass
+        if get_speech_health(timeout=2.0) is not None:
+            log("speech service is online")
+            set_state("idle")
+            return
 
         now = time.monotonic()
         if now - last_log >= SPEECH_WAIT_LOG_SECONDS:
             log(f"waiting for speech service: {SPEECH_HEALTH_URL}")
+            last_log = now
+        time.sleep(SPEECH_WAIT_POLL_SECONDS)
+
+
+def wait_for_speech_idle(observe_busy_timeout: float = 2.0) -> None:
+    start = time.monotonic()
+    last_log = 0.0
+    saw_busy = False
+    while True:
+        health = get_speech_health()
+        if health is not None:
+            busy = bool(health.get("busy"))
+            if busy:
+                saw_busy = True
+            elif saw_busy:
+                log("speech session finished")
+                return
+            elif time.monotonic() - start >= observe_busy_timeout:
+                log("speech service is idle; no active session observed")
+                return
+
+        now = time.monotonic()
+        if now - last_log >= SPEECH_WAIT_LOG_SECONDS:
+            log(f"waiting for speech session to finish: {SPEECH_HEALTH_URL}")
             last_log = now
         time.sleep(SPEECH_WAIT_POLL_SECONDS)
 
@@ -232,19 +176,11 @@ def main() -> None:
                     log(f"wake keyword matched: {matched}")
                     break
 
-        before_wake = wait_for_status()
-        before_non_idle_seq = int_value(before_wake.get("non_idle_seq")) if before_wake is not None else None
         trigger_status = trigger_speech()
         if trigger_status == 202:
-            active_non_idle_seq = wait_for_status_change(before_non_idle_seq)
-            wait_for_status_idle(active_non_idle_seq)
+            wait_for_speech_idle()
         elif trigger_status == 409:
-            current_status = get_status() or before_wake
-            if status_is_busy(current_status):
-                wait_for_status_idle(before_non_idle_seq)
-            else:
-                set_idle()
-                log("speech service is busy but no active speech state was observed")
+            wait_for_speech_idle(observe_busy_timeout=0.0)
         else:
             set_idle()
             if trigger_status is None:

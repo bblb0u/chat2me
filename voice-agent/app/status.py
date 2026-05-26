@@ -10,7 +10,7 @@ from glob import glob
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
-from app.agent import DisplayClient, env_float, env_int, env_value, log
+from app.runtime import DisplayClient, env_float, env_int, env_value, log
 
 
 DISPLAY_SERIAL_PORT = env_value("DISPLAY_SERIAL_PORT", allow_empty=True)
@@ -19,6 +19,7 @@ DISPLAY_SERIAL_CANDIDATES = tuple(candidate.strip() for candidate in DISPLAY_SER
 DISPLAY_SERIAL_BAUD = env_int("DISPLAY_SERIAL_BAUD")
 DISPLAY_SYNC_SECONDS = env_float("DISPLAY_SYNC_SECONDS")
 DISPLAY_TEXT_MAX_CHARS = env_int("DISPLAY_TEXT_MAX_CHARS")
+DISPLAY_SERIAL_RETRY_SECONDS = env_float("DISPLAY_SERIAL_RETRY_SECONDS")
 STATUS_WAIT_MAX_TIMEOUT_SECONDS = env_float("STATUS_WAIT_MAX_TIMEOUT_SECONDS")
 STATUS_HOST = os.getenv("STATUS_HOST", "0.0.0.0")
 STATUS_PORT = int(os.getenv("STATUS_PORT", "8091"))
@@ -39,7 +40,12 @@ def resolve_display_port(port: str) -> str:
 
 
 display_port = resolve_display_port(DISPLAY_SERIAL_PORT)
-display = DisplayClient(display_port, DISPLAY_SERIAL_BAUD)
+display = DisplayClient(
+    display_port,
+    DISPLAY_SERIAL_BAUD,
+    text_max_chars=DISPLAY_TEXT_MAX_CHARS,
+    retry_seconds=DISPLAY_SERIAL_RETRY_SECONDS,
+)
 state_lock = threading.Condition()
 last_state = {
     "state": "idle",

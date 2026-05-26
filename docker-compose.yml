@@ -75,8 +75,6 @@ services:
     depends_on:
       chat2m-gateway:
         condition: service_healthy
-      chat2m-status:
-        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8090/health"]
       interval: 30s
