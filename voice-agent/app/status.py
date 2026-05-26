@@ -6,6 +6,7 @@ from pathlib import Path
 import sys
 import threading
 import time
+from glob import glob
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
@@ -13,11 +14,8 @@ from app.agent import DisplayClient, env_float, env_int, env_value, log
 
 
 DISPLAY_SERIAL_PORT = env_value("DISPLAY_SERIAL_PORT", allow_empty=True)
-DISPLAY_SERIAL_CANDIDATES = tuple(
-    candidate.strip()
-    for candidate in env_value("DISPLAY_SERIAL_CANDIDATES").split(",")
-    if candidate.strip()
-)
+DISPLAY_SERIAL_CANDIDATES_ENV = os.getenv("DISPLAY_SERIAL_CANDIDATES", "")
+DISPLAY_SERIAL_CANDIDATES = tuple(candidate.strip() for candidate in DISPLAY_SERIAL_CANDIDATES_ENV.split(",") if candidate.strip())
 DISPLAY_SERIAL_BAUD = env_int("DISPLAY_SERIAL_BAUD")
 DISPLAY_SYNC_SECONDS = env_float("DISPLAY_SYNC_SECONDS")
 DISPLAY_TEXT_MAX_CHARS = env_int("DISPLAY_TEXT_MAX_CHARS")
@@ -29,9 +27,15 @@ STATUS_PORT = int(os.getenv("STATUS_PORT", "8091"))
 def resolve_display_port(port: str) -> str:
     if port and port.lower() != "auto":
         return port
-    for candidate in DISPLAY_SERIAL_CANDIDATES:
-        if Path(candidate).exists():
-            return candidate
+    candidates = DISPLAY_SERIAL_CANDIDATES or (
+        "/dev/chat2m-display",
+        "/dev/serial/by-id/*Espressif*",
+        "/host-dev/serial/by-id/*Espressif*",
+    )
+    for candidate in candidates:
+        for resolved in glob(candidate):
+            if Path(resolved).exists():
+                return resolved
     return ""
 
 

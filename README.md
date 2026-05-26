@@ -150,6 +150,14 @@ docker compose logs -f chat2m-wake chat2m-speech chat2m-status
 
 首次启动会自动检查 sherpa-onnx KWS/ASR 模型和 Piper 中文 TTS 模型。模型关键文件可用则复用，不可用或为空会删除对应模型后重新下载。
 
+状态屏串口默认通过宿主机 `/dev/chat2m-display` 传入容器，避免绑定 `/dev/ttyACM0` 这类会随 USB 插拔顺序漂移的端口。首次部署或更换显示屏后，在宿主机执行：
+
+```bash
+sudo scripts/install-display-udev.sh /dev/ttyACM0
+```
+
+脚本会根据当前显示屏的 USB VID/PID/serial 写入 udev 规则。当前这块 ESP32-S3 显示屏会匹配 `303a:1001` 和 serial `44:1B:F6:85:CF:34`，生成 `/dev/chat2m-display`。
+
 ## 数据目录
 
 可迁移运行时数据统一放在 `data/`，不提交到 Git：

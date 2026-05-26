@@ -42,11 +42,11 @@ services:
     image: bblb0u/chat2m-status:latest
     container_name: chat2m-status
     restart: unless-stopped
-    privileged: true
     command: ["python3", "-m", "app.status"]
+    devices:
+      - /dev/chat2m-display:/dev/chat2m-display
     volumes:
       - ./data/config:/app/config
-      - /dev:/host-dev
     environment:
       VOICE_MODELS_REQUIRED: "0"
       VOICE_ROLE: chat2m-status
