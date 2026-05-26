@@ -87,11 +87,8 @@ class WakeHandler(BaseHTTPRequestHandler):
         if path == "/health":
             self._send_json({"ok": True, "busy": WakeHandler.busy_lock.locked()})
             return
-        if path == "/audio/source":
-            if WakeHandler.audio_source is None:
-                self._send_json({"ok": False, "source": "respeaker", "error": "unavailable"})
-                return
-            self._send_json(WakeHandler.audio_source.snapshot())
+        if path == "/direction":
+            self._send_json(direction_snapshot(WakeHandler.audio_source))
             return
         else:
             self.send_response(404)
@@ -130,6 +127,12 @@ class WakeHandler(BaseHTTPRequestHandler):
         ).start()
         self.send_response(202)
         self.end_headers()
+
+
+def direction_snapshot(audio_source) -> dict[str, object]:
+    if audio_source is None:
+        return {"ok": False, "source": "respeaker", "error": "unavailable", "updated_at": time.time()}
+    return audio_source.snapshot()
 
 
 def run_session_thread(recognizer, voice, tts_config, display: StatusClient, beep_path: Path, audio_source) -> None:

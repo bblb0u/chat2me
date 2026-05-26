@@ -96,6 +96,30 @@ OLLAMA_MODEL=qwen3:4b-instruct
 
 检查网关和 Ollama 状态。
 
+### `GET /direction`
+
+读取 ReSpeaker Mic Array v3.0 的声源方向。这个接口用于后续头部自由度或其他外部控制模块；语音里问“我在你的哪边”只是调用同一份方向数据做验证。
+
+```json
+{
+  "ok": true,
+  "source": "respeaker",
+  "raw_angle_degrees": 122,
+  "angle_degrees": 122,
+  "sector": "back_right",
+  "label": "右后方",
+  "voice_activity": false,
+  "coordinate": {
+    "zero": "front",
+    "positive": "clockwise",
+    "unit": "degrees"
+  },
+  "updated_at": 1779775407.9472184
+}
+```
+
+`angle_degrees` 是校准后的角度：`0` 表示正前方，顺时针增加。`RESPEAKER_DOA_FRONT_OFFSET_DEGREES` 用来校准设备正前方，`RESPEAKER_DOA_CLOCKWISE` 用来修正左右方向。
+
 ### `POST /chat`
 
 请求：
@@ -131,7 +155,7 @@ OLLAMA_MODEL=qwen3:4b-instruct
 
 - 唤醒监听：`chat2m-wake` 默认监听“嗨小江 / 嘿小江 / 小江”，用于提升实际唤醒稳定性。
 - ASR 输入：唤醒后使用 ReSpeaker Mic Array v3.0 处理后的采集音频和 sherpa-onnx streaming ASR，把识别文本 POST 到 `/chat`。
-- 声源方向：`chat2m-speech` 通过 ReSpeaker 官方 USB 控制接口读取 DOA/VAD；问“我在你的哪边”会直接回答方向，内部接口为 `GET http://chat2m-speech:8090/audio/source`。
+- 声源方向：`chat2m-speech` 通过 ReSpeaker 官方 USB 控制接口读取 DOA/VAD；统一接口为 `GET http://chat2m-gateway:8080/direction`，内部直连为 `GET http://chat2m-speech:8090/direction`，问“我在你的哪边”会直接读取该接口数据回答。
 - 连续对话：唤醒后先播放“有什么可以帮助您的”，之后最多连续 8 轮，不需要每轮重复唤醒。
 - 退出会话：说“退下吧”“你走吧”“走吧”“不用了”“再见”等会回到待机。
 - TTS 输出：Piper 本地中文 `zh_CN-huayan-medium`，合成 PCM 后直接通过 ALSA 播放。

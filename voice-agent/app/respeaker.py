@@ -28,9 +28,20 @@ PARAMETERS = {
     "DOAANGLE": (21, 0, "int", "ro"),
 }
 
+DIRECTION_SECTORS = (
+    ("front", "正前方"),
+    ("front_right", "右前方"),
+    ("right", "右侧"),
+    ("back_right", "右后方"),
+    ("back", "正后方"),
+    ("back_left", "左后方"),
+    ("left", "左侧"),
+    ("front_left", "左前方"),
+)
+
 DIRECTION_QUERY_RE = re.compile(
-    r"(我在你(的)?(哪边|哪一边|什么方向|哪个方向|左边|右边|前面|后面)|"
-    r"你(能|可以)?(听出|判断|知道)?我在(哪边|哪一边|什么方向|哪个方向))"
+    r"(我在你(的)?(哪边|哪一边|哪儿|哪里|什么方向|哪个方向|左边|右边|前面|后面)|"
+    r"你(能|可以)?(听出|判断|知道)?我在(哪边|哪一边|哪儿|哪里|什么方向|哪个方向))"
 )
 
 
@@ -41,22 +52,14 @@ def env_int_base(key: str) -> int:
         raise RuntimeError(f"{key} must be an integer in runtime.env") from None
 
 
-def direction_label(angle: int) -> str:
-    sectors = (
-        "正前方",
-        "右前方",
-        "右侧",
-        "右后方",
-        "正后方",
-        "左后方",
-        "左侧",
-        "左前方",
-    )
-    return sectors[int(((angle + 22.5) % 360) // 45)]
+def direction_sector(angle: int) -> dict[str, str]:
+    code, label = DIRECTION_SECTORS[int(((angle + 22.5) % 360) // 45)]
+    return {"code": code, "label": label}
 
 
 def is_direction_query(text: str) -> bool:
-    normalized = re.sub(r"[\s，。！？,.!?]", "", text)
+    normalized = re.sub(r"[\s，。！？、,.!?]", "", text).replace("您", "你")
+    normalized = re.sub(r"(哪|那){2,}", r"\1", normalized)
     return bool(DIRECTION_QUERY_RE.search(normalized))
 
 
@@ -141,11 +144,17 @@ class ReSpeakerAudioSource:
         return int(round(angle)) % 360
 
     def snapshot(self) -> dict[str, Any]:
+        now = time.time()
         try:
             raw_angle = int(self.read("DOAANGLE"))
-            direction_degrees = self.normalize_angle(raw_angle)
+            angle = self.normalize_angle(raw_angle)
         except Exception as exc:
-            return {"ok": False, "source": "respeaker", "error": str(exc), "updated_at": time.time()}
+            return {
+                "ok": False,
+                "source": "respeaker",
+                "error": str(exc),
+                "updated_at": now,
+            }
 
         try:
             voice_activity: bool | None = bool(self.read("VOICEACTIVITY"))
@@ -153,14 +162,23 @@ class ReSpeakerAudioSource:
             log(f"respeaker voice activity read failed: {exc}")
             voice_activity = None
 
+        sector = direction_sector(angle)
         return {
             "ok": True,
             "source": "respeaker",
-            "raw_direction_degrees": raw_angle,
-            "direction_degrees": direction_degrees,
-            "direction_label": direction_label(direction_degrees),
+            "raw_angle_degrees": raw_angle,
+            "angle_degrees": angle,
+            "sector": sector["code"],
+            "label": sector["label"],
             "voice_activity": voice_activity,
-            "updated_at": time.time(),
+            "coordinate": {
+                "zero": "front",
+                "positive": "clockwise",
+                "unit": "degrees",
+                "front_offset_degrees": self.front_offset_degrees,
+                "device_clockwise": self.clockwise,
+            },
+            "updated_at": now,
         }
 
     def answer_direction(self) -> str:
@@ -168,8 +186,8 @@ class ReSpeakerAudioSource:
         if not snapshot.get("ok"):
             return "我现在读不到麦克风方向信息。"
         return (
-            f"你大概在我的{snapshot['direction_label']}，"
-            f"角度约{snapshot['direction_degrees']}度。"
+            f"你大概在我的{snapshot['label']}，"
+            f"角度约{snapshot['angle_degrees']}度。"
         )
 
 

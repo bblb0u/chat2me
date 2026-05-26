@@ -101,6 +101,7 @@ LLM_REACHABILITY_TIMEOUT_SECONDS = env_float("LLM_REACHABILITY_TIMEOUT_SECONDS")
 OLLAMA_NUM_CTX = env_int("OLLAMA_NUM_CTX")
 OLLAMA_NUM_THREAD = env_int("OLLAMA_NUM_THREAD")
 EMPTY_ANSWER_RESPONSE = env_value("EMPTY_ANSWER_RESPONSE")
+SPEECH_DIRECTION_URL = os.getenv("SPEECH_DIRECTION_URL", "http://chat2m-speech:8090/direction")
 WAKE_WORDS = env_csv("WAKE_WORDS")
 PROFILE_PATH = Path(os.getenv("PROFILE_PATH", "/app/config/profile.yaml"))
 SAFETY_PATH = Path(os.getenv("SAFETY_PATH", "/app/config/safety.yaml"))
@@ -133,6 +134,19 @@ class ReachabilityResponse(BaseModel):
     model: str | None
     status: str
     checked_at: float | None = None
+
+
+class DirectionResponse(BaseModel):
+    ok: bool
+    source: str
+    raw_angle_degrees: int | None = None
+    angle_degrees: int | None = None
+    sector: str | None = None
+    label: str | None = None
+    voice_activity: bool | None = None
+    coordinate: dict[str, Any] | None = None
+    updated_at: float
+    error: str | None = None
 
 
 app = FastAPI(title="Chat2M Voice Gateway", version="0.1.0")
@@ -539,6 +553,38 @@ async def health() -> HealthResponse:
         llm="unsupported_provider",
         ollama="skipped",
     )
+
+
+@app.get("/direction", response_model=DirectionResponse)
+async def direction() -> DirectionResponse:
+    try:
+        async with httpx.AsyncClient(timeout=1.5) as client:
+            response = await client.get(SPEECH_DIRECTION_URL)
+            response.raise_for_status()
+            data = response.json()
+    except httpx.HTTPError as exc:
+        return DirectionResponse(
+            ok=False,
+            source="respeaker",
+            error=f"speech_direction_unavailable:{exc.__class__.__name__}",
+            updated_at=time.time(),
+        )
+    except ValueError:
+        return DirectionResponse(
+            ok=False,
+            source="respeaker",
+            error="speech_direction_invalid_json",
+            updated_at=time.time(),
+        )
+
+    if not isinstance(data, dict):
+        return DirectionResponse(
+            ok=False,
+            source="respeaker",
+            error="speech_direction_invalid_payload",
+            updated_at=time.time(),
+        )
+    return DirectionResponse(**data)
 
 
 def request_route(request: ChatRequest) -> str:
