@@ -142,6 +142,44 @@ def wait_for_speech_idle(observe_busy_timeout: float = 2.0) -> None:
         time.sleep(SPEECH_WAIT_POLL_SECONDS)
 
 
+def listen_for_wake(kws, input_device: int | str | None, chunk: int) -> str:
+    stream = kws.create_stream()
+    matched = ""
+    last_error_log = 0.0
+    log(f"wake listener active: {wake_words_display()}")
+
+    while not matched:
+        try:
+            with sd.InputStream(
+                channels=INPUT_CHANNELS,
+                dtype="float32",
+                samplerate=SAMPLE_RATE,
+                device=input_device,
+                blocksize=chunk,
+            ) as audio:
+                while not matched:
+                    samples = read_mono(audio, chunk)
+                    stream.accept_waveform(SAMPLE_RATE, samples)
+                    while kws.is_ready(stream):
+                        kws.decode_stream(stream)
+                        result = kws.get_result(stream)
+                        if not result:
+                            continue
+                        matched = result
+                        log(f"wake keyword matched: {matched}")
+                        break
+        except Exception as exc:
+            now = time.monotonic()
+            if now - last_error_log >= SPEECH_WAIT_LOG_SECONDS:
+                log(f"wake input stream unavailable; retrying: {exc}")
+                last_error_log = now
+            set_state("error", "audio input unavailable")
+            time.sleep(SPEECH_WAIT_POLL_SECONDS)
+            stream = kws.create_stream()
+
+    return matched
+
+
 def main() -> None:
     start_health_server()
     wait_for_speech()
@@ -154,28 +192,7 @@ def main() -> None:
     ready_event.set()
 
     while True:
-        stream = kws.create_stream()
-        matched = ""
-        log(f"wake listener active: {wake_words_display()}")
-        with sd.InputStream(
-            channels=INPUT_CHANNELS,
-            dtype="float32",
-            samplerate=SAMPLE_RATE,
-            device=input_device,
-            blocksize=chunk,
-        ) as audio:
-            while not matched:
-                samples = read_mono(audio, chunk)
-                stream.accept_waveform(SAMPLE_RATE, samples)
-                while kws.is_ready(stream):
-                    kws.decode_stream(stream)
-                    result = kws.get_result(stream)
-                    if not result:
-                        continue
-                    matched = result
-                    log(f"wake keyword matched: {matched}")
-                    break
-
+        listen_for_wake(kws, input_device, chunk)
         trigger_status = trigger_speech()
         if trigger_status == 202:
             wait_for_speech_idle()

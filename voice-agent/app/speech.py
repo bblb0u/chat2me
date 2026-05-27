@@ -149,16 +149,41 @@ def run_session_thread(recognizer, voice, tts_config, display: StatusClient, bee
         WakeHandler.busy_lock.release()
 
 
+def open_session_input(input_device: int | str | None, chunk: int) -> sd.InputStream:
+    deadline = time.monotonic() + 5.0
+    last_error: Exception | None = None
+    while time.monotonic() < deadline:
+        audio: sd.InputStream | None = None
+        try:
+            audio = sd.InputStream(
+                channels=INPUT_CHANNELS,
+                dtype="float32",
+                samplerate=SAMPLE_RATE,
+                device=input_device,
+                blocksize=chunk,
+            )
+            audio.start()
+            return audio
+        except Exception as exc:
+            last_error = exc
+            if audio is not None:
+                try:
+                    audio.close()
+                except Exception:
+                    pass
+            log(f"speech input stream unavailable; retrying: {exc}")
+            time.sleep(0.25)
+
+    if last_error is not None:
+        raise last_error
+    raise RuntimeError("speech input stream unavailable")
+
+
 def run_session(recognizer, voice, tts_config, display: StatusClient, beep_path: Path, audio_source) -> None:
     input_device = select_input_device(INPUT_DEVICE)
     chunk = int(CHUNK_SECONDS * SAMPLE_RATE)
-    with sd.InputStream(
-        channels=INPUT_CHANNELS,
-        dtype="float32",
-        samplerate=SAMPLE_RATE,
-        device=input_device,
-        blocksize=chunk,
-    ) as audio:
+    audio = open_session_input(input_device, chunk)
+    try:
         llm_route = choose_llm_route()
         display.set_state("listening", "wake")
         speak_pausing_input(audio, WAKE_RESPONSE, voice, tts_config, display)
@@ -186,6 +211,8 @@ def run_session(recognizer, voice, tts_config, display: StatusClient, beep_path:
         log("conversation reached max turns")
         speak_pausing_input(audio, SESSION_END_RESPONSE, voice, tts_config, display)
         display.set_state("idle")
+    finally:
+        audio.close()
 
 
 def main() -> None:
