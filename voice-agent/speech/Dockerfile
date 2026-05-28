@@ -77,7 +77,7 @@ RUN python3 -m pip install --no-cache-dir --force-reinstall --no-deps "$JETSON_T
       "onnx==1.16.1" \
       "onnxruntime==1.16.3" \
       "openai-whisper==20231117" \
-      "piper-tts==1.4.2" \
+      "piper-tts==1.2.0" \
       "regex" \
       "scipy==1.10.1" \
       "sense-voice-streaming-asr==0.1.1" \

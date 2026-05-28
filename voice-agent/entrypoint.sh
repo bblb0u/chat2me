@@ -861,7 +861,7 @@ ensure_piper_runtime() {
   if python_module_ok piper; then
     return
   fi
-  install_python_packages "Piper" "piper-tts==1.4.2"
+  install_python_packages "Piper" "piper-tts==1.2.0"
 }
 
 sensevoice_runtime_ok() {

@@ -172,9 +172,9 @@ docker compose logs -f chat2m-wake chat2m-speech chat2m-status
 
 默认唤醒词是“嗨小江 / 嘿小江 / 小江”。如果要更换唤醒词、音频设备、显示屏串口、Ollama 模型或 CosyVoice 说话人/语速，改 `data/config/runtime.env`；完整配置说明见 `.env.example`。ASR 热词和 `profile.yaml` 一样是独立外挂配置，运行时修改 `data/config/hotwords.yaml`，重启 `chat2m-speech` 后生效。
 
-首次启动会按 `VOICE_ROLE`、`VOICE_ASR_ENGINE`、`VOICE_TTS_ENGINE` 安装当前组合需要的运行时依赖，再检查唤醒、ASR 和 TTS 模型。未选中的 ASR/TTS 依赖不会预装进镜像，也不会在运行时下载。
+镜像会预装对应服务需要的运行时依赖。启动后主要检查和下载的是 `data/models/` 下可迁移复用的唤醒、ASR、TTS 模型，以及 CosyVoice fp16 JIT/TRT 加速文件；换机器时保留 `data/` 可以复用这些内容。
 
-ASR/TTS 模型不打进镜像，避免镜像本身过大。运行时只需要在 `data/config/runtime.env` 里选择引擎和模型：
+ASR/TTS 大模型不打进镜像，避免镜像本身过大。运行时只需要在 `data/config/runtime.env` 里选择引擎和模型：
 
 ```env
 VOICE_ASR_ENGINE=sherpa
@@ -183,7 +183,7 @@ VOICE_TTS_ENGINE=piper
 VOICE_TTS_MODEL=zh_CN-huayan-medium
 ```
 
-默认配置是 SenseVoice 流式 ASR + CosyVoice 流式 TTS，CosyVoice 必须启用 GPU。`chat2m-speech` 会用 Docker `nvidia` runtime 启动；只要选择 `VOICE_TTS_ENGINE=cosyvoice`，运行时就会安装 CUDA 版 PyTorch 并强制校验 `torch.cuda.is_available()`，CUDA 不可用时直接启动失败，不会退回 CPU：
+默认配置是 SenseVoice 流式 ASR + CosyVoice 流式 TTS，CosyVoice 必须启用 GPU。`chat2m-speech` 会用 Docker `nvidia` runtime 启动；只要选择 `VOICE_TTS_ENGINE=cosyvoice`，启动时就会强制校验 `torch.cuda.is_available()`，CUDA 不可用时直接启动失败，不会退回 CPU：
 
 ```env
 VOICE_ASR_ENGINE=sensevoice
@@ -206,7 +206,7 @@ VOICE_ASR_DEVICE=auto       # auto / cpu / cuda
 VOICE_TTS_DEVICE=cuda       # CosyVoice 只允许 auto / cuda，piper 始终 CPU
 ```
 
-下载地址和关键文件校验由镜像内置维护，不需要写在 env 里。CosyVoice 和 SenseVoice/FSMN VAD 模型都会按需下载到 `data/models/`；运行时依赖也只按当前 env 组合安装。
+下载地址和关键文件校验由镜像内置维护，不需要写在 env 里。CosyVoice 和 SenseVoice/FSMN VAD 模型都会按需下载到 `data/models/`；依赖尽量随镜像发布，运行时兜底安装只用于旧镜像或手工改坏的环境。
 
 状态屏串口默认不写宿主机 udev 规则。`chat2m-status` 容器会挂载宿主机 `/dev` 到 `/host-dev`，再按 `data/config/runtime.env` 里的候选规则自动发现同型号 ESP32-S3 USB Serial/JTAG 设备：
 

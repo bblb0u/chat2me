@@ -7,7 +7,6 @@ import re
 import threading
 import subprocess
 import sys
-import tempfile
 import time
 import wave
 from collections import deque
@@ -53,7 +52,6 @@ GATEWAY_URL = os.getenv("GATEWAY_URL", "http://chat2m-gateway:8080/chat")
 GATEWAY_REACHABILITY_URL = os.getenv("GATEWAY_REACHABILITY_URL", GATEWAY_URL.rsplit("/", 1)[0] + "/llm/reachability")
 NETWORK_UNAVAILABLE_RESPONSE = env_value("NETWORK_UNAVAILABLE_RESPONSE")
 LLM_ROUTE_CACHE_INTERVAL_SECONDS = env_float("LLM_ROUTE_CACHE_INTERVAL_SECONDS")
-DISPLAY_SERIAL_PORT = env_value("DISPLAY_SERIAL_PORT", allow_empty=True)
 DISPLAY_SERIAL_BAUD = env_int("DISPLAY_SERIAL_BAUD")
 INPUT_DEVICE = env_value("AUDIO_INPUT_DEVICE", allow_empty=True)
 OUTPUT_DEVICE = env_value("AUDIO_OUTPUT_DEVICE", allow_empty=True)
@@ -78,7 +76,6 @@ ASR_MODELING_UNIT = env_value("ASR_MODELING_UNIT")
 ASR_HOTWORDS_SCORE = env_float("ASR_HOTWORDS_SCORE")
 GATEWAY_REQUEST_TIMEOUT_SECONDS = env_float("GATEWAY_REQUEST_TIMEOUT_SECONDS")
 GATEWAY_UNAVAILABLE_RESPONSE = env_value("GATEWAY_UNAVAILABLE_RESPONSE")
-ASR_ERROR_RESPONSE = env_value("ASR_ERROR_RESPONSE")
 COMMAND_TIMEOUT_SECONDS = env_float("COMMAND_TIMEOUT_SECONDS")
 COMMAND_MIN_SECONDS = env_float("COMMAND_MIN_SECONDS")
 COMMAND_LEADING_SILENCE_SECONDS = env_float("COMMAND_LEADING_SILENCE_SECONDS")
@@ -128,7 +125,6 @@ COSYVOICE_STREAM_SCALE_FACTOR = int(os.getenv("COSYVOICE_STREAM_SCALE_FACTOR", "
 COSYVOICE_FLOW_STEPS = int(os.getenv("COSYVOICE_FLOW_STEPS", "10").strip() or "10")
 DISPLAY_TEXT_MAX_CHARS = env_int("DISPLAY_TEXT_MAX_CHARS")
 DISPLAY_SERIAL_RETRY_SECONDS = env_float("DISPLAY_SERIAL_RETRY_SECONDS")
-NO_COMMAND_RESPONSE = env_value("NO_COMMAND_RESPONSE")
 WAKE_RESPONSE = env_value("WAKE_RESPONSE")
 SESSION_IDLE_RESPONSE = env_value("SESSION_IDLE_RESPONSE", allow_empty=True)
 SESSION_END_RESPONSE = env_value("SESSION_END_RESPONSE")
@@ -554,6 +550,16 @@ class PiperTTS:
         self.config = voice.config
 
     def synthesize_pcm(self, text: str) -> Iterable[bytes]:
+        if hasattr(self.voice, "synthesize_stream_raw"):
+            yield from self.voice.synthesize_stream_raw(
+                text,
+                speaker_id=PIPER_SPEAKER,
+                length_scale=PIPER_LENGTH_SCALE,
+                noise_scale=PIPER_NOISE_SCALE,
+                noise_w=PIPER_NOISE_W_SCALE,
+            )
+            return
+
         for chunk in self.voice.synthesize(text, self.piper_config):
             yield audio_chunk_bytes(chunk)
 
@@ -626,19 +632,23 @@ class CachedTextToSpeech:
 
 
 def create_piper_tts() -> TextToSpeech:
-    from piper.config import SynthesisConfig
     from piper.voice import PiperVoice
 
     require_file(PIPER_MODEL)
     require_file(PIPER_CONFIG)
     voice = PiperVoice.load(PIPER_MODEL, config_path=PIPER_CONFIG)
-    config = SynthesisConfig(
-        speaker_id=PIPER_SPEAKER,
-        length_scale=PIPER_LENGTH_SCALE,
-        noise_scale=PIPER_NOISE_SCALE,
-        noise_w_scale=PIPER_NOISE_W_SCALE,
-        volume=PIPER_VOLUME,
-    )
+    try:
+        from piper.config import SynthesisConfig
+
+        config = SynthesisConfig(
+            speaker_id=PIPER_SPEAKER,
+            length_scale=PIPER_LENGTH_SCALE,
+            noise_scale=PIPER_NOISE_SCALE,
+            noise_w_scale=PIPER_NOISE_W_SCALE,
+            volume=PIPER_VOLUME,
+        )
+    except ImportError:
+        config = None
     return PiperTTS(voice, config)
 
 
@@ -1402,106 +1412,3 @@ def handle_conversation_turn(
         log(f"answer shortened for speech: {speech_answer}")
     speak_pausing_input(audio, speech_answer, voice, tts_config, display)
     return True
-
-
-def handle_wake(
-    audio: sd.InputStream,
-    beep_path: Path,
-    recognizer: StreamingRecognizer,
-    voice: TextToSpeech,
-    tts_config: Any,
-    display: DisplayClient,
-) -> None:
-    log("wake detected")
-    llm_route = choose_llm_route()
-    display.set_state("listening", "wake")
-    speak_pausing_input(audio, WAKE_RESPONSE, voice, tts_config, display)
-    drain_audio(audio, POST_RESPONSE_DRAIN_SECONDS)
-
-    for turn in range(1, MAX_SESSION_TURNS + 1):
-        log(f"conversation turn {turn}/{MAX_SESSION_TURNS}")
-        try:
-            command = listen_command(audio, beep_path, recognizer, play_ready_beep=False)
-        except Exception as exc:
-            log(f"asr failed in conversation: {exc}")
-            display.set_state("error", "asr failed")
-            speak_pausing_input(audio, ASR_ERROR_RESPONSE, voice, tts_config, display)
-            return
-
-        if not command:
-            log("conversation idle timeout")
-            if SESSION_IDLE_RESPONSE:
-                speak_pausing_input(audio, SESSION_IDLE_RESPONSE, voice, tts_config, display)
-            display.set_state("idle")
-            return
-
-        if not handle_conversation_turn(audio, command, voice, tts_config, display, llm_route):
-            return
-        drain_audio(audio, POST_RESPONSE_DRAIN_SECONDS)
-
-    log("conversation reached max turns")
-    speak_pausing_input(audio, SESSION_END_RESPONSE, voice, tts_config, display)
-    display.set_state("idle")
-
-
-def main() -> None:
-    start_llm_route_cache()
-    input_device = select_input_device(INPUT_DEVICE)
-    log(f"input device: {input_device if input_device is not None else 'default'}")
-    log(f"output device: {OUTPUT_DEVICE}")
-    display = DisplayClient(DISPLAY_SERIAL_PORT, DISPLAY_SERIAL_BAUD)
-    log(f"display serial: {DISPLAY_SERIAL_PORT or 'disabled'}")
-    display.set_state("idle")
-    log(f"input channels: {INPUT_CHANNELS}, selected channel: {INPUT_CHANNEL_INDEX}")
-    log(f"loading {VOICE_TTS_ENGINE} TTS model: {TTS_MODEL_DIR if VOICE_TTS_ENGINE == 'cosyvoice' else PIPER_MODEL}")
-    voice, tts_config = create_tts()
-    log(f"{VOICE_TTS_ENGINE} TTS ready: sample_rate={voice.config.sample_rate}")
-    preload_tts_cache(voice, WAKE_RESPONSE, SESSION_END_RESPONSE, SESSION_IDLE_RESPONSE)
-    warmup_tts(voice)
-    log("loading low-power wake-word model only")
-    kws = create_kws()
-    stream = kws.create_stream()
-    chunk = int(CHUNK_SECONDS * SAMPLE_RATE)
-    log("preloading ASR model")
-    recognizer = create_asr()
-    log("ASR model ready")
-
-    beep_path = Path(tempfile.gettempdir()) / "chat2m_wake.wav"
-    write_beep(beep_path)
-
-    log(f"wake listener active: {wake_words_display()}")
-    with sd.InputStream(
-        channels=INPUT_CHANNELS,
-        dtype="float32",
-        samplerate=SAMPLE_RATE,
-        device=input_device,
-        blocksize=chunk,
-    ) as audio:
-        while True:
-            samples = read_mono(audio, chunk)
-            stream.accept_waveform(SAMPLE_RATE, samples)
-            while kws.is_ready(stream):
-                kws.decode_stream(stream)
-                result = kws.get_result(stream)
-                if result:
-                    log(f"wake keyword matched: {result}")
-                    kws.reset_stream(stream)
-                    try:
-                        handle_wake(audio, beep_path, recognizer, voice, tts_config, display)
-                    except Exception as exc:
-                        log(f"wake handling failed: {exc}")
-                        display.set_state("error", str(exc))
-                    drain_audio(audio, POST_RESPONSE_DRAIN_SECONDS)
-                    stream = kws.create_stream()
-                    log(f"wake listener active: {wake_words_display()}")
-                    break
-
-
-if __name__ == "__main__":
-    try:
-        main()
-    except KeyboardInterrupt:
-        log("stopped")
-    except Exception as exc:
-        log(f"fatal: {exc}")
-        sys.exit(1)
