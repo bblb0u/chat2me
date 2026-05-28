@@ -84,7 +84,8 @@ RUN python3 -m pip install --no-cache-dir --force-reinstall --no-deps "$JETSON_T
       "sentencepiece" \
       "sherpa-onnx==1.12.38" \
       "tiktoken==0.7.0" \
-      "transformers==4.45.2"
+      "transformers==4.45.2" \
+      "wetext==0.0.4"
 
 RUN git clone --depth 1 --branch "$COSYVOICE_GIT_REF" https://github.com/FunAudioLLM/CosyVoice.git /opt/CosyVoice \
     && git clone --depth 1 https://github.com/shivammehta25/Matcha-TTS.git /opt/CosyVoice/third_party/Matcha-TTS

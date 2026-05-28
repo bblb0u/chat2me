@@ -928,6 +928,7 @@ cosyvoice_runtime_ok() {
     && python_module_ok scipy \
     && python_module_ok regex \
     && python_module_ok modelscope \
+    && python_module_ok wetext \
     && python_module_ok cosyvoice.cli.cosyvoice \
     && python_module_ok matcha
 }
@@ -967,7 +968,8 @@ ensure_cosyvoice_runtime() {
     "scipy==1.10.1" \
     "sentencepiece" \
     "tiktoken==0.7.0" \
-    "transformers==4.45.2"
+    "transformers==4.45.2" \
+    "wetext==0.0.4"
   if [ ! -d "$COSYVOICE_CODE_DIR/cosyvoice" ]; then
     echo "[runtime] downloading CosyVoice code"
     rm -rf "$COSYVOICE_CODE_DIR"
