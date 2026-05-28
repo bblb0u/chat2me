@@ -100,6 +100,10 @@ PIPER_NOISE_SCALE = env_float("PIPER_NOISE_SCALE")
 PIPER_NOISE_W_SCALE = env_float("PIPER_NOISE_W_SCALE")
 PIPER_VOLUME = env_float("PIPER_VOLUME")
 TTS_PLAYER_TIMEOUT_SECONDS = env_float("TTS_PLAYER_TIMEOUT_SECONDS")
+SPEECH_TTS_MAX_CHARS = env_int("SPEECH_TTS_MAX_CHARS")
+TTS_CACHE_ENABLED = env_bool("TTS_CACHE_ENABLED")
+TTS_CACHE_MAX_ITEMS = env_int("TTS_CACHE_MAX_ITEMS")
+TTS_CACHE_MAX_BYTES = env_int("TTS_CACHE_MAX_BYTES")
 TTS_MODEL_DIR = MODELS_DIR / VOICE_TTS_ENGINE / VOICE_TTS_MODEL
 COSYVOICE_SPK_ID = os.getenv("COSYVOICE_SPK_ID", "中文女").strip() or "中文女"
 COSYVOICE_INSTRUCT_TEXT = os.getenv("COSYVOICE_INSTRUCT_TEXT", "用自然、清晰、亲切的语气说话。").strip()
@@ -179,21 +183,17 @@ def select_input_device(selector: str) -> int | str | None:
 
     devices = sd.query_devices()
     selector_lower = selector.lower()
-    fallback_index: int | None = None
+    matched_without_input = False
     for index, device in enumerate(devices):
         if selector_lower not in str(device.get("name", "")).lower():
             continue
         if device.get("max_input_channels", 0) > 0:
             return index
-        if fallback_index is None:
-            fallback_index = index
+        matched_without_input = True
 
-    if fallback_index is not None:
-        log(
-            f"input device containing '{selector}' reports no input channels; "
-            f"trying device {fallback_index} anyway"
-        )
-        return fallback_index
+    if matched_without_input:
+        log(f"input device containing '{selector}' has no input channels; using PortAudio default")
+        return None
 
     log(f"input device containing '{selector}' not found; using PortAudio default")
     return None
@@ -555,6 +555,49 @@ class CosyVoiceTTS:
             yield tensor_audio_bytes(speech)
 
 
+class CachedTextToSpeech:
+    def __init__(self, voice: TextToSpeech, max_items: int, max_bytes: int) -> None:
+        self.voice = voice
+        self.config = voice.config
+        self.max_items = max(0, max_items)
+        self.max_bytes = max(0, max_bytes)
+        self.cache: dict[str, tuple[bytes, ...]] = {}
+        self.order: deque[str] = deque()
+
+    def synthesize_pcm(self, text: str) -> Iterable[bytes]:
+        cached = self.cache.get(text)
+        if cached is not None:
+            for chunk in cached:
+                yield chunk
+            return
+
+        chunks: list[bytes] = []
+        total_bytes = 0
+        cacheable = bool(text) and self.max_items > 0 and self.max_bytes > 0
+        for chunk in self.voice.synthesize_pcm(text):
+            data = bytes(chunk)
+            if cacheable:
+                total_bytes += len(data)
+                if total_bytes <= self.max_bytes:
+                    chunks.append(data)
+                else:
+                    chunks.clear()
+                    cacheable = False
+            yield data
+
+        if cacheable and chunks:
+            self.cache[text] = tuple(chunks)
+            self.order.append(text)
+            while len(self.order) > self.max_items:
+                old_text = self.order.popleft()
+                self.cache.pop(old_text, None)
+
+    def preload(self, text: str) -> None:
+        if text and text not in self.cache:
+            for _ in self.synthesize_pcm(text):
+                pass
+
+
 def create_piper_tts() -> TextToSpeech:
     from piper.config import SynthesisConfig
     from piper.voice import PiperVoice
@@ -678,10 +721,22 @@ def install_cosyvoice_inference_stubs() -> None:
 
 def create_tts() -> tuple[TextToSpeech, None]:
     if VOICE_TTS_ENGINE == "piper":
-        return create_piper_tts(), None
+        return wrap_tts(create_piper_tts()), None
     if VOICE_TTS_ENGINE == "cosyvoice":
-        return create_cosyvoice_tts(), None
+        return wrap_tts(create_cosyvoice_tts()), None
     raise RuntimeError(f"VOICE_TTS_ENGINE '{VOICE_TTS_ENGINE}' is not supported")
+
+
+def wrap_tts(voice: TextToSpeech) -> TextToSpeech:
+    if not TTS_CACHE_ENABLED:
+        return voice
+    return CachedTextToSpeech(voice, TTS_CACHE_MAX_ITEMS, TTS_CACHE_MAX_BYTES)
+
+
+def preload_tts_cache(voice: TextToSpeech, *texts: str) -> None:
+    if isinstance(voice, CachedTextToSpeech):
+        for text in texts:
+            voice.preload(text)
 
 
 def audio_chunk_bytes(chunk: Any) -> bytes:
@@ -739,6 +794,28 @@ def speak(text: str, voice: TextToSpeech, config: Any = None) -> None:
         return_code = player.wait(timeout=TTS_PLAYER_TIMEOUT_SECONDS)
     if return_code != 0:
         raise RuntimeError(f"aplay exited with status {return_code}")
+
+
+def spoken_text(text: str) -> str:
+    cleaned = re.sub(r"\s+", " ", text).strip()
+    if SPEECH_TTS_MAX_CHARS <= 0 or len(cleaned) <= SPEECH_TTS_MAX_CHARS:
+        return cleaned
+
+    parts = re.findall(r"[^。！？!?]+[。！？!?]?", cleaned)
+    output = ""
+    for part in parts:
+        if not part:
+            continue
+        if len(output) + len(part) > SPEECH_TTS_MAX_CHARS:
+            break
+        output += part
+
+    if not output:
+        output = cleaned[:SPEECH_TTS_MAX_CHARS].rstrip("，,、；;：: ")
+    output = output.rstrip()
+    if output and output[-1] not in "。！？!?":
+        output += "。"
+    return output
 
 
 def speak_pausing_input(
@@ -1002,7 +1079,10 @@ def handle_conversation_turn(
         return True
 
     log(f"answer: {answer}")
-    speak_pausing_input(audio, answer, voice, tts_config, display)
+    speech_answer = spoken_text(answer)
+    if speech_answer != answer:
+        log(f"answer shortened for speech: {speech_answer}")
+    speak_pausing_input(audio, speech_answer, voice, tts_config, display)
     return True
 
 
@@ -1058,6 +1138,7 @@ def main() -> None:
     log(f"loading {VOICE_TTS_ENGINE} TTS model: {TTS_MODEL_DIR if VOICE_TTS_ENGINE == 'cosyvoice' else PIPER_MODEL}")
     voice, tts_config = create_tts()
     log(f"{VOICE_TTS_ENGINE} TTS ready: sample_rate={voice.config.sample_rate}")
+    preload_tts_cache(voice, WAKE_RESPONSE, SESSION_END_RESPONSE, SESSION_IDLE_RESPONSE)
     log("loading low-power wake-word model only")
     kws = create_kws()
     stream = kws.create_stream()

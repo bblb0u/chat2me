@@ -98,7 +98,7 @@ resolve_asr_model() {
 }
 
 resolve_tts_model() {
-  VOICE_TTS_ENGINE="$(normalize_key "${VOICE_TTS_ENGINE:-cosyvoice}")"
+  VOICE_TTS_ENGINE="$(normalize_key "${VOICE_TTS_ENGINE:-piper}")"
   case "$VOICE_TTS_ENGINE" in
     piper)
       VOICE_TTS_MODEL="${VOICE_TTS_MODEL:-zh_CN-huayan-medium}"

@@ -36,6 +36,7 @@ from app.agent import (
     handle_conversation_turn,
     listen_command,
     log,
+    preload_tts_cache,
     select_input_device,
     speak_pausing_input,
     start_llm_route_cache,
@@ -225,6 +226,7 @@ def main() -> None:
     log("loading TTS model")
     voice, tts_config = create_tts()
     log(f"TTS ready: sample_rate={voice.config.sample_rate}")
+    preload_tts_cache(voice, WAKE_RESPONSE, SESSION_END_RESPONSE, SESSION_IDLE_RESPONSE)
     audio_source = open_respeaker()
     beep_path = Path("/tmp/chat2m_wake.wav")
     write_beep(beep_path)
