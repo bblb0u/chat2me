@@ -24,7 +24,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY config /defaults/config
 COPY voice-agent/entrypoint.sh /entrypoint.sh
-COPY voice-agent/app ./app
+COPY voice-agent/common/app ./app
+COPY voice-agent/wake/app ./app
 
 ENTRYPOINT ["/entrypoint.sh"]
-CMD ["python3", "-m", "app.agent"]
+CMD ["python3", "-m", "app.wake"]

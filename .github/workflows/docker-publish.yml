@@ -40,11 +40,11 @@ jobs:
           - image: chat2m-gateway
             dockerfile: voice-gateway/Dockerfile
           - image: chat2m-wake
-            dockerfile: voice-agent/Dockerfile
+            dockerfile: voice-agent/wake/Dockerfile
           - image: chat2m-speech
-            dockerfile: voice-agent/Dockerfile.speech
+            dockerfile: voice-agent/speech/Dockerfile
           - image: chat2m-status
-            dockerfile: voice-agent/Dockerfile
+            dockerfile: voice-agent/status/Dockerfile
 
     steps:
       - name: Checkout

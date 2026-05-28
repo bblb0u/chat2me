@@ -91,7 +91,8 @@ RUN git clone --depth 1 --branch "$COSYVOICE_GIT_REF" https://github.com/FunAudi
 
 COPY config /defaults/config
 COPY voice-agent/entrypoint.sh /entrypoint.sh
-COPY voice-agent/app ./app
+COPY voice-agent/common/app ./app
+COPY voice-agent/speech/app ./app
 
 ENV COSYVOICE_CODE_DIR=/opt/CosyVoice \
     COSYVOICE_PACKAGE_PATH=/opt/CosyVoice:/opt/CosyVoice/third_party/Matcha-TTS \
@@ -100,4 +101,4 @@ ENV COSYVOICE_CODE_DIR=/opt/CosyVoice \
     PYTHON_RUNTIME_PREFIX=/opt/chat2m-runtime/python
 
 ENTRYPOINT ["/entrypoint.sh"]
-CMD ["python3", "-m", "app.agent"]
+CMD ["python3", "-m", "app.speech"]
