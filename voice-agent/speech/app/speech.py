@@ -64,6 +64,7 @@ class StatusClient(DisplayClient):
         super().__init__("", DISPLAY_SERIAL_BAUD)
         self.url = url
         self._disabled_until = 0.0
+        self._last_sent: tuple[str, str] | None = None
 
     @property
     def enabled(self) -> bool:
@@ -72,9 +73,13 @@ class StatusClient(DisplayClient):
     def set_state(self, state: str, text: str = "") -> None:
         if not self.enabled or time.monotonic() < self._disabled_until:
             return
+        text = text[:DISPLAY_TEXT_MAX_CHARS]
+        if self._last_sent == (state, text):
+            return
         try:
             with httpx.Client(timeout=2.0) as client:
-                client.post(self.url, json={"state": state, "text": text[:DISPLAY_TEXT_MAX_CHARS]}).raise_for_status()
+                client.post(self.url, json={"state": state, "text": text}).raise_for_status()
+            self._last_sent = (state, text)
         except Exception as exc:
             log(f"status forward failed: {exc}")
             self._disabled_until = time.monotonic() + DISPLAY_SERIAL_RETRY_SECONDS
