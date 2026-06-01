@@ -50,7 +50,7 @@ COPY services/voice/speech-app/respeaker.py ./app/respeaker.py
 COPY services/voice/speech-app/speech.py ./app/speech.py
 COPY services/voice/asr-app/asr.py ./app/asr.py
 COPY services/voice/tts-app/tts.py ./app/tts.py
-COPY services/voice/status-app/status.py ./app/status.py
+COPY services/voice/relay-app/relay.py ./app/relay.py
 RUN chmod +x /entrypoint.sh
 
 ENV COSYVOICE_CODE_DIR=/opt/CosyVoice \

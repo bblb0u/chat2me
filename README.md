@@ -12,7 +12,7 @@ Chat2Me 是一个面向本地部署的中文语音对话系统。它把唤醒词
 - 通过 `chat2me-llm` 调用本地 Ollama 或在线 OpenAI-compatible LLM。
 - 将回答交给 TTS 服务合成语音，并通过 ALSA 播放。
 - 读取 ReSpeaker DOA 声源方向，能回答“我在你哪边”这类问题。
-- 通过 `chat2me-status` 把 `idle/listening/thinking/speaking/error` 状态写到 ESP32-S3 触摸屏。
+- 通过可选的 `chat2me-relay` 把 `idle/listening/thinking/speaking/error` 状态转发到 ESP32-S3 触摸屏。
 
 ## 总体架构
 
@@ -31,17 +31,17 @@ ReSpeaker/麦克风
   -> 扬声器
 
 状态屏:
-chat2me-speech -> chat2me-status -> USB Serial/JTAG -> ESP32-S3 显示固件
+chat2me-relay -> chat2me-speech /state -> USB Serial/JTAG -> ESP32-S3 显示固件
 
 声源方向:
-ReSpeaker USB 控制接口 -> chat2me-speech /direction -> chat2me-core /direction
+ReSpeaker USB 控制接口 -> chat2me-speech /state.direction -> chat2me-core /direction
 ```
 
 Compose 中实际运行 6 个容器：
 
 - `chat2me-llm`：LLM 网关和本地 Ollama。
 - `chat2me-core`：业务编排、固定问答、安全过滤、对外 `/chat`。
-- `chat2me-status`：HTTP 状态转串口显示。
+- `chat2me-relay`：可选状态转发服务，主动读取 `chat2me-speech /state`，并转发到屏幕、信号灯等外设。
 - `chat2me-asr`：ASR 服务，支持在线优先、本地回落。
 - `chat2me-tts`：TTS 服务，支持在线优先、本地回落。
 - `chat2me-speech`：麦克风监听、唤醒、会话流程、播放和方向查询。
@@ -99,7 +99,7 @@ docker compose run --rm --no-deps -e VOICE_ROLE=chat2me-tts chat2me-tts true
 
 ```bash
 docker compose logs -f chat2me-llm chat2me-core
-docker compose logs -f chat2me-speech chat2me-asr chat2me-tts chat2me-status
+docker compose logs -f chat2me-speech chat2me-asr chat2me-tts chat2me-relay
 ```
 
 停止：
@@ -173,7 +173,7 @@ ONLINE_TTS_API_KEY=sk-...
 3. 用 Sherpa ONNX KWS 模型监听唤醒词。
 4. 唤醒后播放 `WAKE_RESPONSE`，进入多轮会话。
 5. 录音时先做噪声门限校准，再把音频送入远程 ASR 服务。
-6. 对方向类问题直接用 ReSpeaker DOA 回答。
+6. 维护并暴露 `/state`，读取时会刷新当前方向；方向数据放在 `state.direction` 里。
 7. 其他问题调用 `chat2me-core`，拿到回答后调用远程 TTS 服务。
 8. 播放期间暂停输入流，避免扬声器声音被继续识别。
 
@@ -237,14 +237,14 @@ ESP32 显示固件通过 USB Serial/JTAG 从标准输入读取一行 JSON：
 `chat2me-speech`：
 
 - `GET /health`
-- `GET /direction`
+- `GET /state`
 - `POST /wake`
 
-`chat2me-status`：
+`chat2me-relay`：
 
 - `GET /health`
-- `GET /wait`
-- `POST /state`
+
+它不在语音主链路内，只轮询 `chat2me-speech /state` 并转发到外设。
 
 示例：
 
@@ -303,14 +303,14 @@ PY
 | 文件 | 作用 |
 | --- | --- |
 | `services/voice/Dockerfile` | 构建统一语音镜像，按 feature 安装 ASR/TTS/在线音频依赖。 |
-| `services/voice/speech-app/speech.py` | 语音主服务：唤醒监听、会话循环、HTTP `/wake`、方向接口、状态转发。 |
+| `services/voice/speech-app/speech.py` | 语音主服务：唤醒监听、会话循环、HTTP `/wake`、状态/方向接口、外设状态转发。 |
 | `services/voice/speech-app/agent.py` | 语音核心库：模型创建、ASR/TTS 适配、音频读写、噪声门限、TTS 播放、服务探活缓存。 |
-| `services/voice/speech-app/respeaker.py` | ReSpeaker USB 参数读写、降噪/AGC/AEC tuning、DOA 角度和方向回答。 |
+| `services/voice/speech-app/respeaker.py` | ReSpeaker USB 参数读写、降噪/AGC/AEC tuning、DOA 角度和方向话术。 |
 | `services/voice/speech-app/f5_tts_runtime.py` | F5-TTS 模型加载和推理适配。 |
 | `services/voice/speech-app/cosyvoice_runtime.py` | CosyVoice 运行时兼容补丁和依赖路径适配。 |
 | `services/voice/asr-app/asr.py` | ASR FastAPI 服务：WAV 上传、在线/本地识别、fallback、reachability。 |
 | `services/voice/tts-app/tts.py` | TTS FastAPI 服务：文本合成 WAV、在线/本地合成、fallback、reachability。 |
-| `services/voice/status-app/status.py` | 状态屏 HTTP 服务：接收状态、长轮询 `/wait`、写串口。 |
+| `services/voice/relay-app/relay.py` | 状态转发服务：主动读取 `chat2me-speech /state`，状态变化时写入屏幕串口，后续可扩展信号灯等输出。 |
 
 ### packages/common
 
@@ -420,6 +420,6 @@ DISPLAY_SERIAL_BAUD=115200
 
 - `docker-compose.yml` 使用 `runtime: nvidia` 和 ARM64 镜像，默认更适合 Jetson 设备。
 - `chat2me-speech` 需要访问 `/dev/snd`、`/dev/bus/usb` 和宿主机 ALSA 配置。
-- `chat2me-status` 通过挂载 `/dev` 到 `/host-dev` 查找 ESP32 串口。
+- `chat2me-relay` 通过挂载 `/dev` 到 `/host-dev` 查找 ESP32 串口；不启动它不影响唤醒、收音、ASR/TTS 和对话。
 - 在线模式不代表每次请求都先探测网络；服务会后台探活，请求使用最近缓存状态。
 - 修改 `infra/default-config/*` 只影响新初始化的配置；已有部署请改 `data/config/*`。

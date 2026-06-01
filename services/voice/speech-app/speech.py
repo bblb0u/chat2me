@@ -52,41 +52,43 @@ from app.agent import (
     wake_words_display,
     write_beep,
 )
-from app.respeaker import direction_answer, open_respeaker
+from app.respeaker import direction_answer_from_snapshot, direction_label, open_respeaker
 
 
 SPEECH_HOST = os.getenv("SPEECH_HOST", "0.0.0.0")
 SPEECH_PORT = int(os.getenv("SPEECH_PORT", "8090"))
-STATUS_URL = os.getenv("STATUS_URL", "http://chat2me-status:8091/state")
+DIRECTION_CHANGE_POLL_SECONDS = float(os.getenv("DIRECTION_CHANGE_POLL_SECONDS", "0.5").strip() or "0.5")
 SPEECH_WAIT_LOG_SECONDS = env_float("SPEECH_WAIT_LOG_SECONDS")
 SPEECH_WAIT_POLL_SECONDS = env_float("SPEECH_WAIT_POLL_SECONDS")
 
 
-class StatusClient(DisplayClient):
-    def __init__(self, url: str) -> None:
+STATE_LOCK = threading.Lock()
+CURRENT_STATE: dict[str, object] = {
+    "state": "idle",
+    "text": "",
+    "direction": {
+        "ok": False,
+        "angle_degrees": None,
+        "error": "not_reported",
+        "updated_at": time.time(),
+    },
+    "seq": 0,
+    "changed_at": time.time(),
+}
+
+
+class SpeechState(DisplayClient):
+    def __init__(self) -> None:
         super().__init__("", DISPLAY_SERIAL_BAUD)
-        self.url = url
-        self._disabled_until = 0.0
-        self._last_sent: tuple[str, str] | None = None
+        self.audio_source = None
 
     @property
     def enabled(self) -> bool:
-        return bool(self.url)
+        return True
 
     def set_state(self, state: str, text: str = "") -> None:
-        if not self.enabled or time.monotonic() < self._disabled_until:
-            return
         text = text[:DISPLAY_TEXT_MAX_CHARS]
-        if self._last_sent == (state, text):
-            return
-        try:
-            with httpx.Client(timeout=2.0) as client:
-                client.post(self.url, json={"state": state, "text": text}).raise_for_status()
-            self._last_sent = (state, text)
-        except Exception as exc:
-            log(f"status forward failed: {exc}")
-            self._disabled_until = time.monotonic() + DISPLAY_SERIAL_RETRY_SECONDS
-
+        update_speech_state(state=state, text=text, direction=direction_status(self.audio_source))
 
 class WakeHandler(BaseHTTPRequestHandler):
     recognizer = None
@@ -105,8 +107,8 @@ class WakeHandler(BaseHTTPRequestHandler):
         if path == "/health":
             self._send_json({"ok": True, "busy": WakeHandler.busy_lock.locked()})
             return
-        if path == "/direction":
-            self._send_json(direction_snapshot(WakeHandler.audio_source))
+        if path == "/state":
+            self._send_json(update_speech_state(direction=direction_status(WakeHandler.audio_source)))
             return
         else:
             self.send_response(404)
@@ -153,7 +155,96 @@ def direction_snapshot(audio_source) -> dict[str, object]:
     return audio_source.snapshot()
 
 
-def run_session_thread(recognizer, voice, tts_config, display: StatusClient, beep_path: Path, audio_source) -> None:
+def direction_status(audio_source) -> dict[str, object]:
+    snapshot = direction_snapshot(audio_source)
+    if not snapshot.get("ok"):
+        return {
+            "ok": False,
+            "angle_degrees": None,
+            "updated_at": snapshot.get("updated_at", time.time()),
+            "error": snapshot.get("error", "unavailable"),
+        }
+    return {
+        "ok": True,
+        "angle_degrees": snapshot.get("angle_degrees"),
+        "updated_at": snapshot.get("updated_at", time.time()),
+    }
+
+
+def normalize_direction(direction: dict[str, object]) -> dict[str, object]:
+    ok = bool(direction.get("ok"))
+    angle = direction.get("angle_degrees")
+    if ok and isinstance(angle, (int, float)):
+        return {
+            "ok": True,
+            "angle_degrees": int(round(float(angle))) % 360,
+            "updated_at": direction.get("updated_at") or time.time(),
+        }
+    return {
+        "ok": False,
+        "angle_degrees": None,
+        "error": str(direction.get("error") or "unavailable"),
+        "updated_at": direction.get("updated_at") or time.time(),
+    }
+
+
+def current_state() -> dict[str, object]:
+    with STATE_LOCK:
+        payload = dict(CURRENT_STATE)
+        payload["direction"] = dict(CURRENT_STATE.get("direction") or {})
+        return payload
+
+
+def direction_bucket(direction: dict[str, object]) -> str | None:
+    if not direction.get("ok"):
+        return None
+    angle = direction.get("angle_degrees")
+    if not isinstance(angle, (int, float)):
+        return None
+    return direction_label(float(angle))
+
+
+def update_speech_state(
+    *,
+    state: str | None = None,
+    text: str | None = None,
+    direction: dict[str, object] | None = None,
+    force_seq: bool = False,
+) -> dict[str, object]:
+    with STATE_LOCK:
+        changed = force_seq
+        if state is not None and CURRENT_STATE["state"] != state:
+            CURRENT_STATE["state"] = state
+            changed = True
+        if text is not None and CURRENT_STATE["text"] != text:
+            CURRENT_STATE["text"] = text
+            changed = True
+        if direction is not None:
+            normalized = normalize_direction(direction)
+            old_direction = CURRENT_STATE.get("direction") or {}
+            if direction_bucket(old_direction) != direction_bucket(normalized) or old_direction.get("ok") != normalized.get("ok"):
+                changed = True
+            CURRENT_STATE["direction"] = normalized
+        if changed:
+            CURRENT_STATE["seq"] = int(CURRENT_STATE["seq"]) + 1
+            CURRENT_STATE["changed_at"] = time.time()
+        payload = dict(CURRENT_STATE)
+        payload["direction"] = dict(CURRENT_STATE.get("direction") or {})
+        return payload
+
+
+def watch_direction_changes(state_store: SpeechState) -> None:
+    interval = max(0.2, DIRECTION_CHANGE_POLL_SECONDS)
+    last_bucket: str | None = None
+    while True:
+        payload = update_speech_state(direction=direction_status(state_store.audio_source))
+        bucket = direction_bucket(dict(payload.get("direction") or {}))
+        if bucket != last_bucket:
+            last_bucket = bucket
+        time.sleep(interval)
+
+
+def run_session_thread(recognizer, voice, tts_config, display: SpeechState, beep_path: Path, audio_source) -> None:
     try:
         log("wake signal received")
         run_session(recognizer, voice, tts_config, display, beep_path, audio_source)
@@ -167,7 +258,7 @@ def run_session_thread(recognizer, voice, tts_config, display: StatusClient, bee
         WakeHandler.busy_lock.release()
 
 
-def listen_for_wake(kws, input_device: int | str | None, chunk: int, display: StatusClient) -> str:
+def listen_for_wake(kws, input_device: int | str | None, chunk: int, display: SpeechState) -> str:
     stream = kws.create_stream()
     matched = ""
     last_error_log = 0.0
@@ -205,7 +296,7 @@ def listen_for_wake(kws, input_device: int | str | None, chunk: int, display: St
     return matched
 
 
-def wait_for_input_device(display: StatusClient) -> int | str | None:
+def wait_for_input_device(display: SpeechState) -> int | str | None:
     last_log = 0.0
     while True:
         input_device = select_input_device(INPUT_DEVICE)
@@ -220,7 +311,7 @@ def wait_for_input_device(display: StatusClient) -> int | str | None:
         time.sleep(SPEECH_WAIT_POLL_SECONDS)
 
 
-def run_embedded_wake_loop(recognizer, voice, tts_config, display: StatusClient, beep_path: Path, audio_source) -> None:
+def run_embedded_wake_loop(recognizer, voice, tts_config, display: SpeechState, beep_path: Path, audio_source) -> None:
     input_device = wait_for_input_device(display)
     log(f"input device: {input_device if input_device is not None else 'default'}")
     log(f"loading wake-word model: {KWS_MODEL_DIR}")
@@ -266,7 +357,7 @@ def open_session_input(input_device: int | str | None, chunk: int) -> sd.InputSt
     raise RuntimeError("speech input stream unavailable")
 
 
-def run_session(recognizer, voice, tts_config, display: StatusClient, beep_path: Path, audio_source) -> None:
+def run_session(recognizer, voice, tts_config, display: SpeechState, beep_path: Path, audio_source) -> None:
     input_device = wait_for_input_device(display)
     chunk = int(CHUNK_SECONDS * SAMPLE_RATE)
     audio = open_session_input(input_device, chunk)
@@ -285,7 +376,8 @@ def run_session(recognizer, voice, tts_config, display: StatusClient, beep_path:
                     speak_pausing_input(audio, SESSION_IDLE_RESPONSE, voice, tts_config, display)
                 display.set_state("idle")
                 return
-            direction_reply = direction_answer(command, audio_source)
+            direction_payload = update_speech_state(direction=direction_status(audio_source))
+            direction_reply = direction_answer_from_snapshot(command, dict(direction_payload.get("direction") or {}))
             if direction_reply is not None:
                 log(f"direction answer: {direction_reply}")
                 speak_pausing_input(audio, direction_reply, voice, tts_config, display)
@@ -304,7 +396,6 @@ def run_session(recognizer, voice, tts_config, display: StatusClient, beep_path:
 
 def main() -> None:
     log(f"core url: {CORE_URL}")
-    log(f"status url: {STATUS_URL}")
     start_llm_route_cache()
     start_asr_route_cache()
     start_tts_route_cache()
@@ -315,7 +406,9 @@ def main() -> None:
     audio_source = open_respeaker()
     beep_path = Path("/tmp/chat2me_wake.wav")
     write_beep(beep_path)
-    display = StatusClient(STATUS_URL)
+    display = SpeechState()
+    display.audio_source = audio_source
+    threading.Thread(target=watch_direction_changes, args=(display,), daemon=True).start()
 
     WakeHandler.recognizer = recognizer
     WakeHandler.voice = voice

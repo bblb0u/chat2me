@@ -57,6 +57,10 @@ def direction_sector(angle: int) -> dict[str, str]:
     return {"code": code, "label": label}
 
 
+def direction_label(angle: int | float) -> str:
+    return direction_sector(int(round(angle)) % 360)["label"]
+
+
 def is_direction_query(text: str) -> bool:
     normalized = re.sub(r"[\s，。！？、,.!?]", "", text).replace("您", "你")
     normalized = re.sub(r"(哪|那){2,}", r"\1", normalized)
@@ -185,10 +189,7 @@ class ReSpeakerAudioSource:
         snapshot = self.snapshot()
         if not snapshot.get("ok"):
             return "我现在读不到麦克风方向信息。"
-        return (
-            f"你大概在我的{snapshot['label']}，"
-            f"角度约{snapshot['angle_degrees']}度。"
-        )
+        return f"您在我的{snapshot['label']}。"
 
 
 def open_respeaker() -> ReSpeakerAudioSource | None:
@@ -223,3 +224,18 @@ def direction_answer(text: str, source: ReSpeakerAudioSource | None) -> str | No
     if source is None:
         return "我现在读不到麦克风方向信息。"
     return source.answer_direction()
+
+
+def direction_answer_from_snapshot(text: str, snapshot: dict[str, Any]) -> str | None:
+    if not is_direction_query(text):
+        return None
+    if not snapshot.get("ok"):
+        return "我现在读不到麦克风方向信息。"
+    angle = snapshot.get("angle_degrees")
+    if angle is None:
+        return "我现在读不到麦克风方向信息。"
+    try:
+        label = direction_label(float(angle))
+    except (TypeError, ValueError):
+        return "我现在读不到麦克风方向信息。"
+    return f"您在我的{label}。"

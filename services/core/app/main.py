@@ -69,7 +69,7 @@ CORE_LLM_HEALTH_URL = os.getenv("CORE_LLM_HEALTH_URL", CORE_LLM_URL.rsplit("/", 
 CORE_LLM_TIMEOUT_SECONDS = env_float("CORE_LLM_TIMEOUT_SECONDS", "180")
 CORE_LLM_REACHABILITY_TIMEOUT_SECONDS = env_float("CORE_LLM_REACHABILITY_TIMEOUT_SECONDS", "2")
 EMPTY_ANSWER_RESPONSE = env_value("EMPTY_ANSWER_RESPONSE")
-SPEECH_DIRECTION_URL = os.getenv("SPEECH_DIRECTION_URL", "http://chat2me-speech:8090/direction")
+SPEECH_STATE_URL = os.getenv("SPEECH_STATE_URL", "http://chat2me-speech:8090/state")
 WAKE_WORDS = env_csv("WAKE_WORDS")
 PROFILE_PATH = Path(os.getenv("PROFILE_PATH", "/app/config/profile.yaml"))
 SAFETY_PATH = Path(os.getenv("SAFETY_PATH", "/app/config/safety.yaml"))
@@ -107,7 +107,7 @@ class ReachabilityResponse(BaseModel):
 
 class DirectionResponse(BaseModel):
     ok: bool
-    source: str
+    source: str = "status"
     raw_angle_degrees: int | None = None
     angle_degrees: int | None = None
     sector: str | None = None
@@ -223,20 +223,20 @@ async def health() -> HealthResponse:
 async def direction() -> DirectionResponse:
     try:
         async with httpx.AsyncClient(timeout=1.5) as client:
-            response = await client.get(SPEECH_DIRECTION_URL)
+            response = await client.get(SPEECH_STATE_URL)
             response.raise_for_status()
             data = response.json()
     except httpx.HTTPError as exc:
         return DirectionResponse(
             ok=False,
-            source="respeaker",
+            source="status",
             error=f"speech_direction_unavailable:{exc.__class__.__name__}",
             updated_at=time.time(),
         )
     except ValueError:
         return DirectionResponse(
             ok=False,
-            source="respeaker",
+            source="status",
             error="speech_direction_invalid_json",
             updated_at=time.time(),
         )
@@ -244,11 +244,19 @@ async def direction() -> DirectionResponse:
     if not isinstance(data, dict):
         return DirectionResponse(
             ok=False,
-            source="respeaker",
+            source="status",
             error="speech_direction_invalid_payload",
             updated_at=time.time(),
         )
-    return DirectionResponse(**data)
+    direction_data = data.get("direction")
+    if not isinstance(direction_data, dict):
+        return DirectionResponse(
+            ok=False,
+            source="speech",
+            error="speech_state_missing_direction",
+            updated_at=time.time(),
+        )
+    return DirectionResponse(**direction_data)
 
 
 @app.post("/chat", response_model=ChatResponse)
