@@ -44,7 +44,7 @@ Compose 中实际运行 6 个容器：
 - `chat2me-relay`：可选状态转发服务，主动读取 `chat2me-speech /state`，并转发到屏幕、信号灯等外设。
 - `chat2me-asr`：ASR 服务，支持在线优先、本地回落。
 - `chat2me-tts`：TTS 服务，支持在线优先、本地回落。
-- `chat2me-speech`：麦克风监听、唤醒、会话流程、播放和方向查询。
+- `chat2me-speech`：麦克风监听、唤醒、会话流程、播放和状态接口。
 
 ## 技术栈
 
