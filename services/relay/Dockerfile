@@ -1,0 +1,23 @@
+FROM python:3.11-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    VOICE_ROLE=chat2me-relay \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1
+
+WORKDIR /app
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN pip install --no-cache-dir httpx==0.28.1 pyserial==3.5
+
+COPY config /defaults/config
+COPY runtime/config-entrypoint.sh /entrypoint.sh
+COPY runtime/app/runtime.py ./app/runtime.py
+COPY services/relay/app/relay.py ./app/relay.py
+RUN chmod +x /entrypoint.sh
+
+ENTRYPOINT ["/entrypoint.sh"]
+CMD ["python3", "-m", "app.relay"]

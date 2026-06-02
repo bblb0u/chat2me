@@ -9,8 +9,8 @@ WORKDIR /app
 COPY services/core/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY infra/default-config /defaults/config
-COPY services/core/entrypoint.sh /entrypoint.sh
+COPY config /defaults/config
+COPY runtime/config-entrypoint.sh /entrypoint.sh
 COPY services/core/app ./app
 RUN chmod +x /entrypoint.sh
 

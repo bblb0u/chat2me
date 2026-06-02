@@ -16,12 +16,9 @@ from types import SimpleNamespace
 from typing import Any, Iterable, Protocol
 
 from app.runtime import DisplayClient, env_bool, env_float, env_int, env_value, log
-from app.cosyvoice_runtime import install_cosyvoice_runtime_adapters
-
 import httpx
 import numpy as np
 import yaml
-import sounddevice as sd
 
 
 def env_float_compat(primary_key: str, fallback_key: str, default: str) -> float:
@@ -292,15 +289,15 @@ def select_input_device(selector: str) -> int | str | None:
     if selector.isdigit():
         return int(selector)
 
+    import sounddevice as sd
+
     devices = sd.query_devices()
     selector_lower = selector.lower()
-    matched_without_input = False
     for index, device in enumerate(devices):
         if selector_lower not in str(device.get("name", "")).lower():
             continue
         if device.get("max_input_channels", 0) > 0:
             return index
-        matched_without_input = True
 
     return None
 
@@ -1132,6 +1129,8 @@ def create_cosyvoice_tts() -> TextToSpeech:
     import inspect
     import torch
 
+    from app.cosyvoice_runtime import install_cosyvoice_runtime_adapters
+
     install_cosyvoice_runtime_adapters(
         COSYVOICE_PACKAGE_PATH,
         COSYVOICE_WHISPER_ASSETS_DIR,
@@ -1494,7 +1493,7 @@ def spoken_text(text: str) -> str:
 
 
 def speak_pausing_input(
-    audio: sd.InputStream,
+    audio: Any,
     text: str,
     voice: TextToSpeech,
     config: Any,
@@ -1511,7 +1510,7 @@ def speak_pausing_input(
         display.set_state("listening")
 
 
-def drain_audio(audio: sd.InputStream, seconds: float) -> None:
+def drain_audio(audio: Any, seconds: float) -> None:
     chunk = int(CHUNK_SECONDS * SAMPLE_RATE)
     deadline = time.monotonic() + seconds
     while time.monotonic() < deadline:
@@ -1529,7 +1528,7 @@ def mono(samples: np.ndarray) -> np.ndarray:
     return samples[:, channel_index]
 
 
-def read_mono(audio: sd.InputStream, frames: int) -> np.ndarray:
+def read_mono(audio: Any, frames: int) -> np.ndarray:
     samples, overflowed = audio.read(frames)
     if overflowed:
         log("audio input overflowed; command audio may be clipped")
@@ -1558,7 +1557,7 @@ def feed_asr(
     return last_text
 
 
-def calibrate_asr_noise(audio: sd.InputStream, frames: int) -> tuple[float, list[tuple[np.ndarray, float]]]:
+def calibrate_asr_noise(audio: Any, frames: int) -> tuple[float, list[tuple[np.ndarray, float]]]:
     chunks: list[tuple[np.ndarray, float]] = []
     if not ASR_NOISE_GATE_ENABLED or ASR_NOISE_CALIBRATION_SECONDS <= 0:
         return SPEECH_RMS_THRESHOLD, chunks
@@ -1579,7 +1578,7 @@ def calibrate_asr_noise(audio: sd.InputStream, frames: int) -> tuple[float, list
 
 
 def listen_command(
-    audio: sd.InputStream,
+    audio: Any,
     ready_beep_path: Path | None,
     recognizer: StreamingRecognizer,
     play_ready_beep: bool = True,
@@ -1769,7 +1768,7 @@ def is_session_end(command: str) -> bool:
 
 
 def handle_conversation_turn(
-    audio: sd.InputStream,
+    audio: Any,
     command: str,
     voice: TextToSpeech,
     tts_config: Any,

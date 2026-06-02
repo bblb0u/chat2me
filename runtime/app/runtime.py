@@ -7,8 +7,7 @@ import re
 import threading
 import time
 from pathlib import Path
-
-import serial
+from typing import Any
 
 
 def load_runtime_env() -> None:
@@ -94,7 +93,7 @@ class DisplayClient:
         self.baud = baud
         self.text_max_chars = env_int("DISPLAY_TEXT_MAX_CHARS") if text_max_chars is None else text_max_chars
         self.retry_seconds = env_float("DISPLAY_SERIAL_RETRY_SECONDS") if retry_seconds is None else retry_seconds
-        self._serial: serial.Serial | None = None
+        self._serial: Any | None = None
         self._lock = threading.Lock()
         self._disabled_until = 0.0
 
@@ -122,6 +121,13 @@ class DisplayClient:
             "ts": int(time.time()),
         }
         line = (json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
+        try:
+            import serial
+        except ImportError as exc:
+            log(f"display serial dependency unavailable: {exc}")
+            self._disabled_until = time.monotonic() + self.retry_seconds
+            return
+
         with self._lock:
             try:
                 if self._serial is None or not self._serial.is_open:

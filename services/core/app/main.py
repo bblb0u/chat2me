@@ -107,7 +107,7 @@ class ReachabilityResponse(BaseModel):
 
 class DirectionResponse(BaseModel):
     ok: bool
-    source: str = "status"
+    source: str = "speech"
     raw_angle_degrees: int | None = None
     angle_degrees: int | None = None
     sector: str | None = None
@@ -229,14 +229,14 @@ async def direction() -> DirectionResponse:
     except httpx.HTTPError as exc:
         return DirectionResponse(
             ok=False,
-            source="status",
+            source="speech",
             error=f"speech_direction_unavailable:{exc.__class__.__name__}",
             updated_at=time.time(),
         )
     except ValueError:
         return DirectionResponse(
             ok=False,
-            source="status",
+            source="speech",
             error="speech_direction_invalid_json",
             updated_at=time.time(),
         )
@@ -244,7 +244,7 @@ async def direction() -> DirectionResponse:
     if not isinstance(data, dict):
         return DirectionResponse(
             ok=False,
-            source="status",
+            source="speech",
             error="speech_direction_invalid_payload",
             updated_at=time.time(),
         )

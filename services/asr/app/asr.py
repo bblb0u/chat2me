@@ -3,13 +3,10 @@ from __future__ import annotations
 import asyncio
 import io
 import os
-import re
 import time
 import threading
 import wave
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Any
 
 import httpx
 import numpy as np
@@ -17,7 +14,7 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 
 from app import agent
-from app.runtime import env_float, env_value, log
+from app.runtime import env_float, log
 
 
 ASR_HOST = os.getenv("ASR_HOST", "0.0.0.0")

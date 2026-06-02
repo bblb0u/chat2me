@@ -40,8 +40,14 @@ jobs:
             dockerfile: services/llm/Dockerfile
           - image: chat2me-core
             dockerfile: services/core/Dockerfile
-          - image: chat2me-voice
-            dockerfile: services/voice/Dockerfile
+          - image: chat2me-relay
+            dockerfile: services/relay/Dockerfile
+          - image: chat2me-asr
+            dockerfile: services/asr/Dockerfile
+          - image: chat2me-tts
+            dockerfile: services/tts/Dockerfile
+          - image: chat2me-speech
+            dockerfile: services/speech/Dockerfile
 
     steps:
       - name: Checkout

@@ -19,7 +19,7 @@ COPY --from=upstream /usr/lib/ollama /usr/lib/ollama
 COPY services/llm/requirements.txt .
 RUN pip3 install --break-system-packages --no-cache-dir -r requirements.txt
 
-COPY infra/default-config /defaults/config
+COPY config /defaults/config
 COPY services/llm/entrypoint.sh /entrypoint.sh
 COPY services/llm/app ./app
 RUN chmod +x /entrypoint.sh

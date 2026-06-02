@@ -1,9 +1,5 @@
-click==8.1.8
 httpx==0.28.1
 huggingface-hub==0.31.4
 numpy==1.24.4
 pypinyin==0.55.0
 PyYAML==6.0.2
-pyserial==3.5
-pyusb==1.2.1
-sounddevice==0.5.1

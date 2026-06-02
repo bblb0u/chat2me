@@ -2,7 +2,7 @@
 
 Chat2Me 是一个面向本地部署的中文语音对话系统。它把唤醒词、语音识别、对话编排、大模型、语音合成、麦克风声源方向和 ESP32 状态屏拆成独立模块，通过 Docker Compose 组合运行。
 
-项目当前默认面向 NVIDIA Jetson / ARM64 场景：LLM 镜像内置 Ollama，本地语音镜像包含 Sherpa ONNX、SenseVoice、MeloTTS、Piper、F5-TTS、CosyVoice 等运行时，并可按配置切到 OpenAI-compatible 在线 ASR/TTS/LLM。当在线服务不可用时，系统会回落到本地模型。
+项目当前默认面向 NVIDIA Jetson / ARM64 场景：LLM 镜像内置 Ollama，ASR、TTS、Speech、Relay 分别构建独立镜像，并可按配置切到 OpenAI-compatible 在线 ASR/TTS/LLM。当在线服务不可用时，系统会回落到本地模型。
 
 ## 项目能做什么
 
@@ -31,7 +31,7 @@ ReSpeaker/麦克风
   -> 扬声器
 
 状态屏:
-chat2me-relay -> chat2me-speech /state -> USB Serial/JTAG -> ESP32-S3 显示固件
+chat2me-relay 主动读取 chat2me-speech /state -> USB Serial/JTAG -> ESP32-S3 显示固件
 
 声源方向:
 ReSpeaker USB 控制接口 -> chat2me-speech /state.direction -> chat2me-core /direction
@@ -48,7 +48,7 @@ Compose 中实际运行 6 个容器：
 
 ## 技术栈
 
-- 后端语言：Python 3.11、Python 3.8/Ubuntu 20.04 语音镜像运行环境。
+- 后端语言：Python 3.11、Python 3.8/Ubuntu 20.04 ASR/TTS/Speech 镜像运行环境。
 - Web/API：FastAPI、Uvicorn、Pydantic、httpx；语音主循环和状态服务使用 `http.server`。
 - 本地 LLM：Ollama，默认 `qwen3:4b-instruct`。
 - 在线模型接口：OpenAI-compatible `/chat/completions` 或 `/responses`，在线 ASR `/audio/transcriptions`，在线 TTS `/audio/speech`。
@@ -110,7 +110,7 @@ docker compose down
 
 ## 配置说明
 
-运行配置以 `infra/default-config/` 为模板。容器首次启动时，entrypoint 会把默认文件复制到 `data/config/`，之后只读取和修改 `data/config/` 下的副本。
+运行配置以根目录 `config/` 为模板。容器首次启动时，entrypoint 会把默认文件复制到 `data/config/`，之后只读取和修改 `data/config/` 下的副本。
 
 常用 LLM 配置：
 
@@ -275,7 +275,11 @@ PY
 | 文件 | 作用 |
 | --- | --- |
 | `README.md` | 项目说明文档。 |
-| `docker-compose.yml` | 定义 LLM、Core、ASR、TTS、Speech、Status 六个服务及设备/卷/健康检查。 |
+| `docker-compose.yml` | 定义 LLM、Core、Relay、ASR、TTS、Speech 六个服务及设备/卷/健康检查。 |
+| `config/runtime.env` | 默认运行配置模板。 |
+| `config/profile.yaml` | 默认机器人身份、固定问答和系统提示词。 |
+| `config/safety.yaml` | 默认敏感关键词与阻断回复。 |
+| `config/hotwords.yaml` | 默认 ASR 热词。 |
 | `.env.example` | 全量运行环境变量参考。 |
 | `.dockerignore` | Docker build 时忽略无关文件。 |
 | `.gitignore` | Git 忽略规则。 |
@@ -285,7 +289,6 @@ PY
 | 文件 | 作用 |
 | --- | --- |
 | `services/core/Dockerfile` | 构建 Core 镜像，安装 FastAPI 依赖并复制默认配置。 |
-| `services/core/entrypoint.sh` | 首次启动时初始化 `/app/config`。 |
 | `services/core/requirements.txt` | Core Python 依赖。 |
 | `services/core/app/main.py` | Core FastAPI 应用：安全过滤、固定问答、LLM 转发、方向查询。 |
 
@@ -298,53 +301,59 @@ PY
 | `services/llm/requirements.txt` | LLM 网关 Python 依赖。 |
 | `services/llm/app/main.py` | LLM FastAPI 应用：本地/在线路由、探活、回落、响应解析。 |
 
-### services/voice
+### services/asr
 
 | 文件 | 作用 |
 | --- | --- |
-| `services/voice/Dockerfile` | 构建统一语音镜像，按 feature 安装 ASR/TTS/在线音频依赖。 |
-| `services/voice/speech-app/speech.py` | 语音主服务：唤醒监听、会话循环、HTTP `/wake`、状态/方向接口、外设状态转发。 |
-| `services/voice/speech-app/agent.py` | 语音核心库：模型创建、ASR/TTS 适配、音频读写、噪声门限、TTS 播放、服务探活缓存。 |
-| `services/voice/speech-app/respeaker.py` | ReSpeaker USB 参数读写、降噪/AGC/AEC tuning、DOA 角度和方向话术。 |
-| `services/voice/speech-app/f5_tts_runtime.py` | F5-TTS 模型加载和推理适配。 |
-| `services/voice/speech-app/cosyvoice_runtime.py` | CosyVoice 运行时兼容补丁和依赖路径适配。 |
-| `services/voice/asr-app/asr.py` | ASR FastAPI 服务：WAV 上传、在线/本地识别、fallback、reachability。 |
-| `services/voice/tts-app/tts.py` | TTS FastAPI 服务：文本合成 WAV、在线/本地合成、fallback、reachability。 |
-| `services/voice/relay-app/relay.py` | 状态转发服务：主动读取 `chat2me-speech /state`，状态变化时写入屏幕串口，后续可扩展信号灯等输出。 |
+| `services/asr/Dockerfile` | 构建 ASR 镜像，默认 `VOICE_ROLE=chat2me-asr`，只安装 ASR 服务、在线转写和 WAV 上传接口所需依赖。 |
+| `services/asr/requirements.txt` | ASR 服务基础 Python 依赖。 |
+| `services/asr/app/asr.py` | ASR FastAPI 服务：WAV 上传、在线/本地识别、fallback、reachability。 |
 
-### packages/common
+### services/tts
 
 | 文件 | 作用 |
 | --- | --- |
-| `packages/common/app/runtime.py` | 语音服务共享运行时工具：读取 `runtime.env`、环境变量解析、日志、串口显示客户端。 |
-| `packages/common/voice-entrypoint.sh` | 语音镜像入口：初始化配置、解析模型选择、下载/校验 KWS/ASR/TTS 模型。 |
-| `packages/common/voice-requirements.txt` | 语音镜像基础 Python 依赖。 |
+| `services/tts/Dockerfile` | 构建 TTS 镜像，默认 `VOICE_ROLE=chat2me-tts`，只安装 TTS 服务、在线合成和本地 TTS 引擎所需依赖。 |
+| `services/tts/requirements.txt` | TTS 服务基础 Python 依赖。 |
+| `services/tts/app/tts.py` | TTS FastAPI 服务：文本合成 WAV、在线/本地合成、fallback、reachability。 |
+| `services/tts/app/f5_tts_runtime.py` | F5-TTS 模型加载和推理适配。 |
+| `services/tts/app/cosyvoice_runtime.py` | CosyVoice 运行时兼容补丁和依赖路径适配。 |
 
-### infra/default-config
-
-| 文件 | 作用 |
-| --- | --- |
-| `infra/default-config/runtime.env` | 默认运行配置模板。 |
-| `infra/default-config/profile.yaml` | 默认机器人身份、固定问答和系统提示词。 |
-| `infra/default-config/safety.yaml` | 默认敏感关键词与阻断回复。 |
-| `infra/default-config/hotwords.yaml` | 默认 ASR 热词。 |
-
-### infra/image-deps
+### services/speech
 
 | 文件 | 作用 |
 | --- | --- |
-| `infra/image-deps/install-selected.sh` | 根据 feature 列表安装指定语音依赖。 |
-| `infra/image-deps/lib.sh` | 下载、pip、apt、git clone 的重试工具函数。 |
-| `infra/image-deps/base/apt.sh` | 安装音频、USB、ffmpeg、Python 编译基础包。 |
-| `infra/image-deps/platform/jetson-gpu.sh` | 配置 Jetson L4T CUDA/TensorRT apt 源并安装 GPU 库。 |
-| `infra/image-deps/platform/jetson-torch.sh` | 安装 Jetson PyTorch wheel。 |
-| `infra/image-deps/asr/sensevoice.sh` | 安装 SenseVoice streaming ASR 依赖并做兼容补丁。 |
-| `infra/image-deps/asr/sherpa.sh` | 安装 Sherpa ONNX。 |
-| `infra/image-deps/tts/piper.sh` | 下载并安装 Piper runtime。 |
-| `infra/image-deps/tts/melotts.sh` | 复用 Sherpa ONNX runtime 支持 MeloTTS ONNX。 |
-| `infra/image-deps/tts/f5.sh` | 安装 F5-TTS 及 Jetson GPU/Torch 依赖。 |
-| `infra/image-deps/tts/cosyvoice.sh` | 安装 CosyVoice、Matcha-TTS、Whisper tokenizer 资源及 GPU 依赖。 |
-| `infra/image-deps/online/audio.sh` | 校验在线音频所需的 httpx 和 ffmpeg。 |
+| `services/speech/Dockerfile` | 构建 Speech 镜像，默认 `VOICE_ROLE=chat2me-speech`，只安装唤醒、麦克风输入、扬声器播放、ReSpeaker 和远程调用所需依赖。 |
+| `services/speech/requirements.txt` | Speech 服务基础 Python 依赖。 |
+| `services/speech/app/speech.py` | 语音主服务：唤醒监听、会话循环、HTTP `/wake`、状态接口和远程 ASR/TTS 调用。 |
+| `services/speech/app/respeaker.py` | ReSpeaker USB 参数读写、降噪/AGC/AEC tuning、DOA 角度和方向话术。 |
+
+### services/relay
+
+| 文件 | 作用 |
+| --- | --- |
+| `services/relay/Dockerfile` | 构建 Relay 镜像，默认 `VOICE_ROLE=chat2me-relay`，只安装状态轮询和串口转发所需依赖。 |
+| `services/relay/app/relay.py` | 状态转发服务：主动读取 `chat2me-speech /state`，状态变化时写入屏幕串口，后续可扩展信号灯等输出。 |
+
+### runtime
+
+| 文件 | 作用 |
+| --- | --- |
+| `runtime/app/runtime.py` | ASR/TTS/Speech/Relay 共享运行时工具：读取 `runtime.env`、环境变量解析、日志、串口显示客户端。 |
+| `runtime/app/agent.py` | ASR/TTS/Speech 共享语音逻辑：模型创建、远程 ASR/TTS 适配、音频读写、噪声门限、播放、服务探活缓存。 |
+| `runtime/config-entrypoint.sh` | Core 和 Relay 共用入口：首次启动时初始化 `/app/config`。 |
+| `runtime/audio-entrypoint.sh` | ASR/TTS/Speech 镜像入口：初始化配置、解析模型选择、下载/校验 KWS/ASR/TTS 模型。 |
+| `runtime/deps/install-selected.sh` | 根据 feature 列表安装指定语音依赖。 |
+| `runtime/deps/lib.sh` | 下载、pip、apt、git clone 的重试工具函数。 |
+| `runtime/deps/sherpa-onnx.sh` | 安装 ASR、MeloTTS 和唤醒词共用的 Sherpa ONNX runtime。 |
+| `runtime/deps/platform/jetson-gpu.sh` | 配置 Jetson L4T CUDA/TensorRT apt 源并安装 GPU 库。 |
+| `runtime/deps/platform/jetson-torch.sh` | 安装 Jetson PyTorch wheel。 |
+| `runtime/deps/asr/sensevoice.sh` | 安装 SenseVoice streaming ASR 依赖并做兼容补丁。 |
+| `runtime/deps/tts/piper.sh` | 下载并安装 Piper runtime。 |
+| `runtime/deps/tts/melotts.sh` | 复用 Sherpa ONNX runtime 支持 MeloTTS ONNX。 |
+| `runtime/deps/tts/f5.sh` | 安装 F5-TTS 及 Jetson GPU/Torch 依赖。 |
+| `runtime/deps/tts/cosyvoice.sh` | 安装 CosyVoice、Matcha-TTS、Whisper tokenizer 资源及 GPU 依赖。 |
+| `runtime/deps/online/audio.sh` | 校验在线音频所需的 httpx 和 ffmpeg。 |
 
 ### firmware/display
 
@@ -368,7 +377,7 @@ PY
 
 | 路径 | 作用 |
 | --- | --- |
-| `.github/workflows/docker-publish.yml` | GitHub Actions：构建并推送 `chat2me-core`、`chat2me-llm`、`chat2me-voice` ARM64 镜像。 |
+| `.github/workflows/docker-publish.yml` | GitHub Actions：构建并推送 `chat2me-core`、`chat2me-llm`、`chat2me-relay`、`chat2me-asr`、`chat2me-tts`、`chat2me-speech` ARM64 镜像。 |
 | `data/config/*` | 当前机器实际生效的配置。 |
 | `data/models/*` | 已下载模型和运行时生成文件。 |
 | `data/ollama/*` | Ollama 模型、缓存和密钥。 |
@@ -422,4 +431,4 @@ DISPLAY_SERIAL_BAUD=115200
 - `chat2me-speech` 需要访问 `/dev/snd`、`/dev/bus/usb` 和宿主机 ALSA 配置。
 - `chat2me-relay` 通过挂载 `/dev` 到 `/host-dev` 查找 ESP32 串口；不启动它不影响唤醒、收音、ASR/TTS 和对话。
 - 在线模式不代表每次请求都先探测网络；服务会后台探活，请求使用最近缓存状态。
-- 修改 `infra/default-config/*` 只影响新初始化的配置；已有部署请改 `data/config/*`。
+- 修改 `config/*` 只影响新初始化的配置；已有部署请改 `data/config/*`。

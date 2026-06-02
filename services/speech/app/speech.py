@@ -10,14 +10,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse
 
-import httpx
 import sounddevice as sd
 
 from app.agent import (
-    ASR_MODEL_DIR,
     CHUNK_SECONDS,
     DISPLAY_SERIAL_BAUD,
-    DISPLAY_SERIAL_RETRY_SECONDS,
     DISPLAY_TEXT_MAX_CHARS,
     CORE_URL,
     INPUT_CHANNELS,
@@ -31,24 +28,21 @@ from app.agent import (
     SESSION_IDLE_RESPONSE,
     WAKE_RESPONSE,
     DisplayClient,
-    create_asr,
     create_kws,
     create_remote_asr,
     create_remote_tts,
-    create_tts,
     drain_audio,
     env_float,
     handle_conversation_turn,
     listen_command,
+    log_llm_online_cache,
     log,
-    preload_tts_cache,
     read_mono,
     select_input_device,
     speak_pausing_input,
     start_asr_route_cache,
     start_llm_route_cache,
     start_tts_route_cache,
-    warmup_tts,
     wake_words_display,
     write_beep,
 )
@@ -432,4 +426,3 @@ if __name__ == "__main__":
     except Exception as exc:
         log(f"fatal: {exc}")
         sys.exit(1)
-    log_llm_online_cache,
