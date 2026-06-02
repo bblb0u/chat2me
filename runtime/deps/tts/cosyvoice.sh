@@ -1,10 +1,10 @@
 #!/bin/sh
 set -eu
 
-. /opt/chat2me-deps/lib.sh
+. /opt/chat2me-deps/lib/common.sh
 
-/opt/chat2me-deps/platform/jetson-gpu.sh
-/opt/chat2me-deps/platform/jetson-torch.sh
+/opt/chat2me-deps/platform/jetson_gpu.sh
+/opt/chat2me-deps/platform/jetson_torch.sh
 
 COSYVOICE_GIT_REF="${COSYVOICE_GIT_REF:-v2.0}"
 

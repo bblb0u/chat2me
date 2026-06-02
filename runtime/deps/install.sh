@@ -6,7 +6,7 @@ features="${1:-sensevoice sherpa melotts piper f5-tts online}"
 for feature in $features; do
   case "$feature" in
     asr-sherpa|sherpa)
-      /opt/chat2me-deps/sherpa-onnx.sh
+      /opt/chat2me-deps/shared/sherpa_onnx.sh
       ;;
     asr-sensevoice|sensevoice)
       /opt/chat2me-deps/asr/sensevoice.sh
@@ -24,7 +24,7 @@ for feature in $features; do
       /opt/chat2me-deps/tts/cosyvoice.sh
       ;;
     online|online-audio)
-      /opt/chat2me-deps/online/audio.sh
+      /opt/chat2me-deps/online/http_audio.sh
       ;;
     none)
       ;;

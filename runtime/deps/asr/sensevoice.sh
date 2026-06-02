@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-. /opt/chat2me-deps/lib.sh
+. /opt/chat2me-deps/lib/common.sh
 
 pip_install \
   "kaldi_native_fbank" \

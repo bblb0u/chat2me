@@ -15,7 +15,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Iterable, Protocol
 
-from app.runtime import DisplayClient, env_bool, env_float, env_int, env_value, log
+from app.common import DisplayClient, env_bool, env_float, env_int, env_value, log
 import httpx
 import numpy as np
 import yaml

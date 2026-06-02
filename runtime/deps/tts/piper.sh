@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-. /opt/chat2me-deps/lib.sh
+. /opt/chat2me-deps/lib/common.sh
 
 PIPER_RELEASE="${PIPER_RELEASE:-2023.11.14-2}"
 PIPER_ARCHIVE="${PIPER_ARCHIVE:-piper_linux_aarch64.tar.gz}"

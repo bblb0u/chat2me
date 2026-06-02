@@ -1,9 +1,9 @@
 #!/bin/sh
 set -eu
 
-. /opt/chat2me-deps/lib.sh
+. /opt/chat2me-deps/lib/common.sh
 
-if [ -f /opt/chat2me-deps/.jetson-gpu-installed ]; then
+if [ -f /opt/chat2me-deps/.jetson_gpu_installed ]; then
   exit 0
 fi
 
@@ -40,4 +40,4 @@ apt_install_packages \
   python3-libnvinfer \
   tensorrt-libs
 rm -rf /var/lib/apt/lists/*
-touch /opt/chat2me-deps/.jetson-gpu-installed
+touch /opt/chat2me-deps/.jetson_gpu_installed

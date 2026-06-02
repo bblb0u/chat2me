@@ -3,7 +3,7 @@ FROM ubuntu:20.04
 ARG JETSON_L4T_PLATFORM=t234
 ARG JETSON_TORCH_WHEEL_URL=https://developer.download.nvidia.com/compute/redist/jp/v512/pytorch/torch-2.1.0a0+41361538.nv23.06-cp38-cp38-linux_aarch64.whl
 ARG COSYVOICE_GIT_REF=v2.0
-ARG VOICE_AGENT_FEATURES="piper melotts f5-tts cosyvoice online"
+ARG VOICE_RUNTIME_FEATURES="piper melotts f5-tts cosyvoice online"
 ARG CHAT2ME_DOWNLOAD_RETRIES=10
 ARG CHAT2ME_GIT_RETRIES=5
 ARG CHAT2ME_PIP_RETRIES=10
@@ -21,9 +21,9 @@ ENV DEBIAN_FRONTEND=noninteractive \
 
 WORKDIR /app
 
-COPY runtime/deps/lib.sh /opt/chat2me-deps/lib.sh
-RUN chmod +x /opt/chat2me-deps/lib.sh \
-    && . /opt/chat2me-deps/lib.sh \
+COPY runtime/deps/lib /opt/chat2me-deps/lib
+RUN chmod +x /opt/chat2me-deps/lib/common.sh \
+    && . /opt/chat2me-deps/lib/common.sh \
     && apt_install_packages \
        ca-certificates \
        curl \
@@ -38,12 +38,12 @@ RUN chmod +x /opt/chat2me-deps/lib.sh \
     && rm -rf /var/lib/apt/lists/*
 
 COPY services/tts/requirements.txt requirements.txt
-RUN . /opt/chat2me-deps/lib.sh \
+RUN . /opt/chat2me-deps/lib/common.sh \
     && pip_install -r requirements.txt \
     && pip_install fastapi==0.115.6 pydantic==2.10.4 python-multipart==0.0.20 uvicorn[standard]==0.33.0
 
-COPY runtime/deps/install-selected.sh /opt/chat2me-deps/install-selected.sh
-COPY runtime/deps/sherpa-onnx.sh /opt/chat2me-deps/sherpa-onnx.sh
+COPY runtime/deps/install.sh /opt/chat2me-deps/install.sh
+COPY runtime/deps/shared /opt/chat2me-deps/shared
 COPY runtime/deps/tts /opt/chat2me-deps/tts
 COPY runtime/deps/platform /opt/chat2me-deps/platform
 COPY runtime/deps/online /opt/chat2me-deps/online
@@ -51,14 +51,14 @@ RUN find /opt/chat2me-deps -type f -name "*.sh" -exec chmod +x {} + \
     && JETSON_L4T_PLATFORM="$JETSON_L4T_PLATFORM" \
        JETSON_TORCH_WHEEL_URL="$JETSON_TORCH_WHEEL_URL" \
        COSYVOICE_GIT_REF="$COSYVOICE_GIT_REF" \
-       /opt/chat2me-deps/install-selected.sh "$VOICE_AGENT_FEATURES"
+       /opt/chat2me-deps/install.sh "$VOICE_RUNTIME_FEATURES"
 
 RUN python3 -m pip install --no-cache-dir eval_type_backport==0.2.2
 
 COPY config /defaults/config
-COPY runtime/audio-entrypoint.sh /entrypoint.sh
-COPY runtime/app/runtime.py ./app/runtime.py
-COPY runtime/app/agent.py ./app/agent.py
+COPY runtime/entrypoints/audio.sh /entrypoint.sh
+COPY runtime/shared/common.py ./app/common.py
+COPY runtime/shared/voice.py ./app/voice.py
 COPY services/tts/app/engines ./app/engines
 COPY services/tts/app/main.py ./app/main.py
 RUN chmod +x /entrypoint.sh

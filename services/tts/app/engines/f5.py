@@ -13,7 +13,7 @@ from typing import Any
 import numpy as np
 import yaml
 
-from app.runtime import log
+from app.common import log
 
 
 def install_f5_runtime_shims() -> None:

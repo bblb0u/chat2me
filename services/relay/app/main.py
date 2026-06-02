@@ -12,7 +12,7 @@ from urllib.parse import urlparse
 
 import httpx
 
-from app.runtime import DisplayClient, env_float, env_int, env_value, log
+from app.common import DisplayClient, env_float, env_int, env_value, log
 
 
 DISPLAY_SERIAL_PORT = env_value("DISPLAY_SERIAL_PORT", allow_empty=True)

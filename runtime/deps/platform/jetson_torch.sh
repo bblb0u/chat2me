@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-. /opt/chat2me-deps/lib.sh
+. /opt/chat2me-deps/lib/common.sh
 
 if python3 - <<'PY' >/dev/null 2>&1
 import torch

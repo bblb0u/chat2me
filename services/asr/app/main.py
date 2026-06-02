@@ -13,16 +13,16 @@ import numpy as np
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 
-from app import agent
-from app.runtime import env_float, log
+from app import voice
+from app.common import env_float, log
 
 
 ASR_HOST = os.getenv("ASR_HOST", "0.0.0.0")
 ASR_PORT = int(os.getenv("ASR_PORT", "8092"))
 VOICE_ASR_FALLBACK_ENGINE = os.getenv("VOICE_ASR_FALLBACK_ENGINE", "sensevoice").strip().lower() or "sensevoice"
 VOICE_ASR_FALLBACK_MODEL = os.getenv("VOICE_ASR_FALLBACK_MODEL", "SenseVoiceSmall").strip() or "SenseVoiceSmall"
-CONFIGURED_ASR_ENGINE = agent.VOICE_ASR_ENGINE
-CONFIGURED_ASR_MODEL = agent.VOICE_ASR_MODEL
+CONFIGURED_ASR_ENGINE = voice.VOICE_ASR_ENGINE
+CONFIGURED_ASR_MODEL = voice.VOICE_ASR_MODEL
 ASR_REACHABILITY_INTERVAL_SECONDS = env_float("ASR_REACHABILITY_INTERVAL_SECONDS")
 ASR_REACHABILITY_TIMEOUT_SECONDS = env_float("ASR_REACHABILITY_TIMEOUT_SECONDS")
 ONLINE_ASR_REACHABILITY_PATH = os.getenv("ONLINE_ASR_REACHABILITY_PATH", "/models").strip() or "/models"
@@ -67,8 +67,8 @@ class TranscribeResponse(BaseModel):
 app = FastAPI(title="Chat2Me ASR", version="0.1.0")
 ONLINE_REACHABILITY = Reachability(online=False, status="not_checked")
 ONLINE_REACHABILITY_TASK: asyncio.Task[None] | None = None
-LOCAL_RECOGNIZER: agent.StreamingRecognizer | None = None
-ONLINE_RECOGNIZER: agent.StreamingRecognizer | None = None
+LOCAL_RECOGNIZER: voice.StreamingRecognizer | None = None
+ONLINE_RECOGNIZER: voice.StreamingRecognizer | None = None
 ASR_INFERENCE_LOCK = threading.Lock()
 
 
@@ -85,28 +85,28 @@ def local_model() -> str:
 
 
 def with_asr_env(engine: str, model: str) -> None:
-    agent.VOICE_ASR_ENGINE = engine
-    agent.VOICE_ASR_MODEL = model
-    agent.ASR_MODEL_DIR = agent.MODELS_DIR / engine / model
+    voice.VOICE_ASR_ENGINE = engine
+    voice.VOICE_ASR_MODEL = model
+    voice.ASR_MODEL_DIR = voice.MODELS_DIR / engine / model
     if engine == "sensevoice":
-        agent.SENSEVOICE_MODEL_DIR = agent.ASR_MODEL_DIR
-        agent.SENSEVOICE_VAD_MODEL_DIR = agent.MODELS_DIR / "sensevoice" / "speech_fsmn_vad_zh-cn-16k-common-onnx"
+        voice.SENSEVOICE_MODEL_DIR = voice.ASR_MODEL_DIR
+        voice.SENSEVOICE_VAD_MODEL_DIR = voice.MODELS_DIR / "sensevoice" / "speech_fsmn_vad_zh-cn-16k-common-onnx"
 
 
-def create_local_recognizer() -> agent.StreamingRecognizer:
+def create_local_recognizer() -> voice.StreamingRecognizer:
     engine = local_engine()
     model = local_model()
     with_asr_env(engine, model)
-    recognizer = agent.create_asr()
+    recognizer = voice.create_asr()
     log(f"local ASR ready: engine={engine} model={model}")
     return recognizer
 
 
-def create_online_recognizer() -> agent.StreamingRecognizer:
+def create_online_recognizer() -> voice.StreamingRecognizer:
     if not online_enabled():
         raise RuntimeError("online ASR is not configured")
     with_asr_env("online", CONFIGURED_ASR_MODEL)
-    recognizer = agent.create_asr()
+    recognizer = voice.create_asr()
     log(f"online ASR ready: model={CONFIGURED_ASR_MODEL}")
     return recognizer
 
@@ -125,10 +125,10 @@ def read_wav_upload(payload: bytes) -> tuple[np.ndarray, int]:
     return data.astype(np.float32, copy=False), int(sample_rate)
 
 
-def transcribe_with_recognizer(recognizer: agent.StreamingRecognizer, samples: np.ndarray, sample_rate: int) -> str:
+def transcribe_with_recognizer(recognizer: voice.StreamingRecognizer, samples: np.ndarray, sample_rate: int) -> str:
     stream = recognizer.create_stream()
     try:
-        chunk = max(1, int(sample_rate * agent.CHUNK_SECONDS))
+        chunk = max(1, int(sample_rate * voice.CHUNK_SECONDS))
         for offset in range(0, len(samples), chunk):
             recognizer.accept_waveform(stream, sample_rate, samples[offset : offset + chunk])
         recognizer.input_finished(stream)
@@ -140,15 +140,15 @@ def transcribe_with_recognizer(recognizer: agent.StreamingRecognizer, samples: n
 async def probe_online() -> Reachability:
     if not online_enabled():
         return Reachability(online=False, status="online_engine_disabled", checked_at=time.time())
-    if not agent.ONLINE_ASR_BASE_URL:
+    if not voice.ONLINE_ASR_BASE_URL:
         return Reachability(online=False, status="config_error:ONLINE_ASR_BASE_URL", checked_at=time.time())
-    if not agent.ONLINE_ASR_API_KEY:
+    if not voice.ONLINE_ASR_API_KEY:
         return Reachability(online=False, status="config_error:ONLINE_ASR_API_KEY", checked_at=time.time())
     try:
         async with httpx.AsyncClient(timeout=ASR_REACHABILITY_TIMEOUT_SECONDS) as client:
             response = await client.get(
-                f"{agent.ONLINE_ASR_BASE_URL}{ONLINE_ASR_REACHABILITY_PATH}",
-                headers=agent.online_audio_headers(agent.ONLINE_ASR_API_KEY),
+                f"{voice.ONLINE_ASR_BASE_URL}{ONLINE_ASR_REACHABILITY_PATH}",
+                headers=voice.online_audio_headers(voice.ONLINE_ASR_API_KEY),
             )
             status = "ok" if response.is_success else f"http_{response.status_code}"
             return Reachability(online=response.is_success, status=status, checked_at=time.time())

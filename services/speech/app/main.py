@@ -12,7 +12,7 @@ from urllib.parse import urlparse
 
 import sounddevice as sd
 
-from app.agent import (
+from app.voice import (
     CHUNK_SECONDS,
     DISPLAY_SERIAL_BAUD,
     DISPLAY_TEXT_MAX_CHARS,

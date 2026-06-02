@@ -14,16 +14,16 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
-from app import agent
-from app.runtime import env_float, log
+from app import voice
+from app.common import env_float, log
 
 
 TTS_HOST = os.getenv("TTS_HOST", "0.0.0.0")
 TTS_PORT = int(os.getenv("TTS_PORT", "8093"))
 VOICE_TTS_FALLBACK_ENGINE = os.getenv("VOICE_TTS_FALLBACK_ENGINE", "melotts").strip().lower() or "melotts"
 VOICE_TTS_FALLBACK_MODEL = os.getenv("VOICE_TTS_FALLBACK_MODEL", "vits-melo-tts-zh_en").strip() or "vits-melo-tts-zh_en"
-CONFIGURED_TTS_ENGINE = agent.VOICE_TTS_ENGINE
-CONFIGURED_TTS_MODEL = agent.VOICE_TTS_MODEL
+CONFIGURED_TTS_ENGINE = voice.VOICE_TTS_ENGINE
+CONFIGURED_TTS_MODEL = voice.VOICE_TTS_MODEL
 TTS_REACHABILITY_INTERVAL_SECONDS = env_float("TTS_REACHABILITY_INTERVAL_SECONDS")
 TTS_REACHABILITY_TIMEOUT_SECONDS = env_float("TTS_REACHABILITY_TIMEOUT_SECONDS")
 ONLINE_TTS_REACHABILITY_PATH = os.getenv("ONLINE_TTS_REACHABILITY_PATH", "/models").strip() or "/models"
@@ -64,8 +64,8 @@ class ReachabilityResponse(BaseModel):
 app = FastAPI(title="Chat2Me TTS", version="0.1.0")
 ONLINE_REACHABILITY = Reachability(online=False, status="not_checked")
 ONLINE_REACHABILITY_TASK: asyncio.Task[None] | None = None
-LOCAL_VOICE: agent.TextToSpeech | None = None
-ONLINE_VOICE: agent.TextToSpeech | None = None
+LOCAL_VOICE: voice.TextToSpeech | None = None
+ONLINE_VOICE: voice.TextToSpeech | None = None
 TTS_INFERENCE_LOCK = threading.Lock()
 
 
@@ -82,35 +82,35 @@ def local_model() -> str:
 
 
 def with_tts_env(engine: str, model: str) -> None:
-    agent.VOICE_TTS_ENGINE = engine
-    agent.VOICE_TTS_MODEL = model
-    agent.TTS_MODEL_DIR = agent.MODELS_DIR / engine / model
-    agent.PIPER_MODEL = agent.TTS_MODEL_DIR / "model.onnx"
-    agent.PIPER_CONFIG = Path(str(agent.PIPER_MODEL) + ".json")
-    default_f5_ckpt = agent.TTS_MODEL_DIR / "model_1250000.safetensors"
-    default_f5_vocoder = agent.MODELS_DIR / "f5-tts" / "vocos-mel-24khz"
-    agent.F5_TTS_CKPT_FILE = default_f5_ckpt if engine == "f5-tts" else Path(os.getenv("F5_TTS_CKPT_FILE", str(default_f5_ckpt)))
-    agent.F5_TTS_VOCODER_DIR = default_f5_vocoder if engine == "f5-tts" else Path(os.getenv("F5_TTS_VOCODER_DIR", str(default_f5_vocoder)))
+    voice.VOICE_TTS_ENGINE = engine
+    voice.VOICE_TTS_MODEL = model
+    voice.TTS_MODEL_DIR = voice.MODELS_DIR / engine / model
+    voice.PIPER_MODEL = voice.TTS_MODEL_DIR / "model.onnx"
+    voice.PIPER_CONFIG = Path(str(voice.PIPER_MODEL) + ".json")
+    default_f5_ckpt = voice.TTS_MODEL_DIR / "model_1250000.safetensors"
+    default_f5_vocoder = voice.MODELS_DIR / "f5-tts" / "vocos-mel-24khz"
+    voice.F5_TTS_CKPT_FILE = default_f5_ckpt if engine == "f5-tts" else Path(os.getenv("F5_TTS_CKPT_FILE", str(default_f5_ckpt)))
+    voice.F5_TTS_VOCODER_DIR = default_f5_vocoder if engine == "f5-tts" else Path(os.getenv("F5_TTS_VOCODER_DIR", str(default_f5_vocoder)))
 
 
-def create_local_voice() -> agent.TextToSpeech:
+def create_local_voice() -> voice.TextToSpeech:
     engine = local_engine()
     model = local_model()
     with_tts_env(engine, model)
-    voice, _ = agent.create_tts()
-    agent.preload_tts_cache(voice, agent.WAKE_RESPONSE, agent.SESSION_END_RESPONSE, agent.SESSION_IDLE_RESPONSE)
-    agent.warmup_tts(voice)
-    log(f"local TTS ready: engine={engine} model={model} sample_rate={voice.config.sample_rate}")
-    return voice
+    tts_voice, _ = voice.create_tts()
+    voice.preload_tts_cache(tts_voice, voice.WAKE_RESPONSE, voice.SESSION_END_RESPONSE, voice.SESSION_IDLE_RESPONSE)
+    voice.warmup_tts(tts_voice)
+    log(f"local TTS ready: engine={engine} model={model} sample_rate={tts_voice.config.sample_rate}")
+    return tts_voice
 
 
-def create_online_voice() -> agent.TextToSpeech:
+def create_online_voice() -> voice.TextToSpeech:
     if not online_enabled():
         raise RuntimeError("online TTS is not configured")
     with_tts_env("online", CONFIGURED_TTS_MODEL)
-    voice, _ = agent.create_tts()
-    log(f"online TTS ready: model={CONFIGURED_TTS_MODEL} sample_rate={voice.config.sample_rate}")
-    return voice
+    tts_voice, _ = voice.create_tts()
+    log(f"online TTS ready: model={CONFIGURED_TTS_MODEL} sample_rate={tts_voice.config.sample_rate}")
+    return tts_voice
 
 
 def pcm_to_wav(pcm: bytes, sample_rate: int) -> bytes:
@@ -123,23 +123,23 @@ def pcm_to_wav(pcm: bytes, sample_rate: int) -> bytes:
     return buffer.getvalue()
 
 
-def synthesize_wav(voice: agent.TextToSpeech, text: str) -> bytes:
-    pcm = b"".join(chunk for chunk in voice.synthesize_pcm(text) if chunk)
-    return pcm_to_wav(pcm, int(voice.config.sample_rate))
+def synthesize_wav(tts_voice: voice.TextToSpeech, text: str) -> bytes:
+    pcm = b"".join(chunk for chunk in tts_voice.synthesize_pcm(text) if chunk)
+    return pcm_to_wav(pcm, int(tts_voice.config.sample_rate))
 
 
 async def probe_online() -> Reachability:
     if not online_enabled():
         return Reachability(online=False, status="online_engine_disabled", checked_at=time.time())
-    if not agent.ONLINE_TTS_BASE_URL:
+    if not voice.ONLINE_TTS_BASE_URL:
         return Reachability(online=False, status="config_error:ONLINE_TTS_BASE_URL", checked_at=time.time())
-    if not agent.ONLINE_TTS_API_KEY:
+    if not voice.ONLINE_TTS_API_KEY:
         return Reachability(online=False, status="config_error:ONLINE_TTS_API_KEY", checked_at=time.time())
     try:
         async with httpx.AsyncClient(timeout=TTS_REACHABILITY_TIMEOUT_SECONDS) as client:
             response = await client.get(
-                f"{agent.ONLINE_TTS_BASE_URL}{ONLINE_TTS_REACHABILITY_PATH}",
-                headers=agent.online_audio_headers(agent.ONLINE_TTS_API_KEY),
+                f"{voice.ONLINE_TTS_BASE_URL}{ONLINE_TTS_REACHABILITY_PATH}",
+                headers=voice.online_audio_headers(voice.ONLINE_TTS_API_KEY),
             )
             status = "ok" if response.is_success else f"http_{response.status_code}"
             return Reachability(online=response.is_success, status=status, checked_at=time.time())

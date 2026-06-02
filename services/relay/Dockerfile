@@ -14,8 +14,8 @@ RUN apt-get update \
 RUN pip install --no-cache-dir httpx==0.28.1 pyserial==3.5
 
 COPY config /defaults/config
-COPY runtime/config-entrypoint.sh /entrypoint.sh
-COPY runtime/app/runtime.py ./app/runtime.py
+COPY runtime/entrypoints/config.sh /entrypoint.sh
+COPY runtime/shared/common.py ./app/common.py
 COPY services/relay/app/main.py ./app/main.py
 RUN chmod +x /entrypoint.sh
 
