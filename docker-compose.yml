@@ -78,7 +78,7 @@ services:
       interval: 30s
       timeout: 10s
       retries: 5
-      start_period: 30s
+      start_period: 20m
 
   chat2me-tts:
     image: bblb0u/chat2me-tts:latest
@@ -99,7 +99,7 @@ services:
       interval: 30s
       timeout: 10s
       retries: 5
-      start_period: 30s
+      start_period: 20m
 
   chat2me-speech:
     image: bblb0u/chat2me-speech:latest
