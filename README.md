@@ -1,10 +1,21 @@
 # Chat2Me
 
-Chat2Me 是一个面向本地部署的中文语音对话系统。它把唤醒词、语音识别、对话编排、大模型、语音合成、麦克风声源方向和 ESP32 状态屏拆成独立模块，通过 Docker Compose 组合运行。
+Chat2Me 是一套跑在机器人硬件上的中文语音交互系统，不是面向浏览器的通用聊天 Demo。当前默认平台是 NVIDIA Jetson / ARM64，典型外设包括 ReSpeaker 麦克风阵列、ALSA 扬声器和 ESP32-S3 触摸屏。
 
-项目当前默认面向 NVIDIA Jetson / ARM64 场景：LLM 镜像内置 Ollama，ASR、TTS、Speech、Relay 分别构建独立镜像，并可按配置切到 OpenAI-compatible 在线 ASR/TTS/LLM。当在线服务不可用时，系统会回落到本地模型。
+系统把唤醒词、语音识别、对话编排、LLM、语音合成、声源方向和外设状态同步拆成独立模块，通过 Docker Compose 组合运行。LLM 镜像内置 Ollama；ASR、TTS、Speech、Relay 分别构建独立镜像；ASR/TTS/LLM 可以按配置切到 OpenAI-compatible 在线服务，在线不可用时回落到本地模型。
 
-## 项目能做什么
+## 硬件和平台
+
+默认配置按这套设备准备：
+
+- NVIDIA Jetson / ARM64，Docker 使用 NVIDIA runtime。
+- ReSpeaker USB 麦克风阵列，用于唤醒、录音、声源方向和降噪参数控制。
+- ALSA 音频输出设备，用于播放 TTS。
+- Waveshare ESP32-S3-Touch-LCD-3.5 或同类串口外设，用于显示状态、文本和后续交互信号。
+
+其他硬件可以改配置适配，但项目当前不是按 x86 桌面或纯云端部署设计。
+
+## 系统职责
 
 - 通过 ReSpeaker/麦克风持续监听唤醒词，例如 `小江同学`。
 - 唤醒后录制用户语音，调用 ASR 服务转成文本。
@@ -12,7 +23,7 @@ Chat2Me 是一个面向本地部署的中文语音对话系统。它把唤醒词
 - 通过 `chat2me-llm` 调用本地 Ollama 或在线 OpenAI-compatible LLM。
 - 将回答交给 TTS 服务合成语音，并通过 ALSA 播放。
 - 读取 ReSpeaker DOA 声源方向，能回答“我在你哪边”这类问题。
-- 通过可选的 `chat2me-relay` 把 `idle/listening/thinking/speaking/error` 状态转发到 ESP32-S3 触摸屏。
+- 通过可选的 `chat2me-relay` 把状态、文本、动作提示等交互信号转发到屏幕、灯带、控制板或其他外设。
 
 ## 总体架构
 
@@ -30,8 +41,8 @@ ReSpeaker/麦克风
   -> chat2me-speech
   -> 扬声器
 
-状态屏:
-chat2me-relay 主动读取 chat2me-speech /state -> USB Serial/JTAG -> ESP32-S3 显示固件
+外设交互:
+chat2me-relay 主动读取 chat2me-speech /state -> USB Serial/JTAG 或其他输出通道 -> ESP32-S3/灯带/控制板
 
 声源方向:
 ReSpeaker USB 控制接口 -> chat2me-speech /state.direction -> chat2me-core /direction
@@ -41,7 +52,7 @@ Compose 中实际运行 6 个容器：
 
 - `chat2me-llm`：LLM 网关和本地 Ollama。
 - `chat2me-core`：业务编排、固定问答、安全过滤、对外 `/chat`。
-- `chat2me-relay`：可选状态转发服务，主动读取 `chat2me-speech /state`，并转发到屏幕、信号灯等外设。
+- `chat2me-relay`：可选外设交互桥，主动读取 `chat2me-speech /state`，并转发状态、文本和动作提示等信号。
 - `chat2me-asr`：ASR 服务，支持在线优先、本地回落。
 - `chat2me-tts`：TTS 服务，支持在线优先、本地回落。
 - `chat2me-speech`：麦克风监听、唤醒、会话流程、播放和状态接口。
@@ -136,9 +147,16 @@ OLLAMA_MODEL=qwen3:4b-instruct
 ```env
 VOICE_ASR_ENGINE=sensevoice
 VOICE_ASR_MODEL=SenseVoiceSmall
+VOICE_ASR_DEVICE=auto
 VOICE_TTS_ENGINE=melotts
 VOICE_TTS_MODEL=vits-melo-tts-zh_en
+VOICE_TTS_DEVICE=auto
+VOICE_KWS_PROVIDER=auto
+MELOTTS_PROVIDER=auto
+SHERPA_TTS_PROVIDER=auto
 ```
+
+GPU 相关默认值使用 `auto`：运行时先尝试 CUDA/GPU provider，当前镜像或宿主机不可用时才回落 CPU。显式配置 `cuda` 或 `gpu` 时不会回落，CUDA provider 不可用会直接启动失败；需要禁止 CPU 回落时就使用显式配置。`VOICE_ASR_DEVICE=cuda:<index>` 只用于 SenseVoice 的 onnxruntime provider；Sherpa ONNX 的 KWS/ASR/TTS provider 使用 `auto/cpu/cuda/gpu`。
 
 在线 ASR/TTS，失败回落本地：
 
@@ -199,13 +217,15 @@ ONLINE_TTS_API_KEY=sk-...
 - 在线请求失败会自动使用本地 fallback engine/model。
 - ASR 输入是 16-bit PCM WAV；TTS 输出是 `audio/wav`。
 
+`chat2me-relay` 不是语音主链路的一部分。它把 `chat2me-speech /state` 暴露出来的交互状态转成外设可消费的消息，当前默认写给 ESP32-S3 屏幕固件，也可以扩展成灯光、舵机、触摸板、上位机状态同步或其他机器人交互通道。
+
 ESP32 显示固件通过 USB Serial/JTAG 从标准输入读取一行 JSON：
 
 ```json
 {"state":"speaking","text":"回答内容"}
 ```
 
-固件只解析 `state` 字段，并用 LVGL 动画展示不同颜色/节奏的状态 UI。
+当前固件只解析 `state` 字段，并用 LVGL 动画展示不同颜色/节奏的状态 UI；Relay 侧保留 `text` 等字段，方便外设按需要消费更多交互信息。
 
 ## API
 
@@ -334,7 +354,7 @@ PY
 | --- | --- |
 | `services/relay/Dockerfile` | 构建 Relay 镜像，默认 `VOICE_ROLE=chat2me-relay`，只安装状态轮询和串口转发所需依赖。 |
 | `services/relay/requirements.txt` | Relay 服务基础 Python 依赖。 |
-| `services/relay/app/main.py` | Relay 服务入口：主动读取 `chat2me-speech /state`，状态变化时写入屏幕串口，后续可扩展信号灯等输出。 |
+| `services/relay/app/main.py` | Relay 服务入口：主动读取 `chat2me-speech /state`，状态变化时写入串口外设，后续可扩展灯光、动作提示、状态同步等输出。 |
 
 ### runtime
 
@@ -431,6 +451,6 @@ DISPLAY_SERIAL_BAUD=115200
 
 - `docker-compose.yml` 使用 `runtime: nvidia` 和 ARM64 镜像，默认更适合 Jetson 设备。
 - `chat2me-speech` 需要访问 `/dev/snd`、`/dev/bus/usb` 和宿主机 ALSA 配置。
-- `chat2me-relay` 通过挂载 `/dev` 到 `/host-dev` 查找 ESP32 串口；不启动它不影响唤醒、收音、ASR/TTS 和对话。
+- `chat2me-relay` 通过挂载 `/dev` 到 `/host-dev` 查找 ESP32 或其他串口外设；不启动它不影响唤醒、收音、ASR/TTS 和对话。
 - 在线模式不代表每次请求都先探测网络；服务会后台探活，请求使用最近缓存状态。
 - 修改 `config/*` 只影响新初始化的配置；已有部署请改 `data/config/*`。

@@ -85,6 +85,7 @@ else:
     except ValueError:
         raise RuntimeError("AUDIO_INPUT_CHANNEL_INDEX must be an integer or auto in runtime.env") from None
 KWS_THREADS = env_int("KWS_THREADS")
+VOICE_KWS_PROVIDER = os.getenv("VOICE_KWS_PROVIDER", "auto").strip().lower() or "auto"
 ASR_THREADS = env_int("ASR_THREADS")
 ASR_MODEL_PRECISION = env_value("ASR_MODEL_PRECISION")
 ASR_DECODING_METHOD = env_value("ASR_DECODING_METHOD")
@@ -120,7 +121,7 @@ ONLINE_ASR_MIN_AUDIO_SECONDS = env_float("ONLINE_ASR_MIN_AUDIO_SECONDS")
 ONLINE_ASR_SILENCE_SECONDS = env_float("ONLINE_ASR_SILENCE_SECONDS")
 ONLINE_ASR_RMS_THRESHOLD = env_float("ONLINE_ASR_RMS_THRESHOLD")
 SHERPA_TTS_THREADS = env_int("SHERPA_TTS_THREADS")
-SHERPA_TTS_PROVIDER = os.getenv("SHERPA_TTS_PROVIDER", "cpu").strip().lower() or "cpu"
+SHERPA_TTS_PROVIDER = os.getenv("SHERPA_TTS_PROVIDER", "auto").strip().lower() or "auto"
 SHERPA_TTS_SPEED = env_float("SHERPA_TTS_SPEED")
 SHERPA_TTS_LENGTH_SCALE = env_float("SHERPA_TTS_LENGTH_SCALE")
 SHERPA_TTS_NOISE_SCALE = env_float("SHERPA_TTS_NOISE_SCALE")
@@ -131,7 +132,7 @@ SHERPA_TTS_RULE_FSTS = tuple(
     if item.strip()
 )
 MELOTTS_THREADS = env_int("MELOTTS_THREADS")
-MELOTTS_PROVIDER = os.getenv("MELOTTS_PROVIDER", "cpu").strip().lower() or "cpu"
+MELOTTS_PROVIDER = os.getenv("MELOTTS_PROVIDER", "auto").strip().lower() or "auto"
 MELOTTS_SPEAKER = env_int("MELOTTS_SPEAKER")
 MELOTTS_SPEED = env_float("MELOTTS_SPEED")
 MELOTTS_LENGTH_SCALE = env_float("MELOTTS_LENGTH_SCALE")
@@ -157,7 +158,7 @@ TTS_WARMUP_TEXTS = tuple(
 )
 TTS_MODEL_DIR = MODELS_DIR / VOICE_TTS_ENGINE / VOICE_TTS_MODEL
 VOICE_ASR_DEVICE = os.getenv("VOICE_ASR_DEVICE", "auto").strip().lower()
-VOICE_TTS_DEVICE = os.getenv("VOICE_TTS_DEVICE", "cuda").strip().lower()
+VOICE_TTS_DEVICE = os.getenv("VOICE_TTS_DEVICE", "auto").strip().lower()
 PIPER_MODEL = TTS_MODEL_DIR / "model.onnx"
 PIPER_CONFIG = Path(str(PIPER_MODEL) + ".json")
 PIPER_ESPEAK_DATA = Path(os.getenv("PIPER_ESPEAK_DATA", "/opt/piper/espeak-ng-data"))
@@ -279,6 +280,74 @@ def require_file(path: Path) -> None:
         raise FileNotFoundError(f"missing required file: {path}")
 
 
+def sherpa_provider_candidates(setting_name: str, requested: str) -> tuple[str, tuple[str, ...]]:
+    value = requested.strip().lower() or "auto"
+    if value == "auto":
+        return value, ("cuda", "cpu")
+    if value in {"cuda", "gpu"}:
+        return value, ("cuda",)
+    if value == "cpu":
+        return value, ("cpu",)
+    raise RuntimeError(f"{setting_name} must be auto, cpu, cuda, or gpu")
+
+
+def create_with_sherpa_provider(
+    label: str,
+    setting_name: str,
+    requested: str,
+    factory: Any,
+) -> tuple[Any, str]:
+    requested_value, candidates = sherpa_provider_candidates(setting_name, requested)
+    cuda_error: Exception | None = None
+    for provider in candidates:
+        try:
+            instance = factory(provider)
+        except Exception as exc:
+            if requested_value == "auto" and provider == "cuda":
+                cuda_error = exc
+                continue
+            raise RuntimeError(f"{label} failed with {setting_name}={provider}: {exc}") from exc
+        if cuda_error is not None and provider == "cpu":
+            log(f"{label} CUDA provider is unavailable for auto; using CPU: {cuda_error}")
+        return instance, provider
+    raise RuntimeError(f"{label} failed to initialize with {setting_name}=auto")
+
+
+def onnxruntime_providers(setting_name: str, requested: str, available_providers: Iterable[str]) -> tuple[list[Any], bool]:
+    value = requested.strip().lower() or "auto"
+    available = set(available_providers)
+    cuda_available = "CUDAExecutionProvider" in available
+    cuda_provider: Any = "CUDAExecutionProvider"
+
+    if value.startswith("cuda:"):
+        device_index = value.split(":", 1)[1]
+        if not device_index.isdigit():
+            raise RuntimeError(f"{setting_name} must be auto, cpu, cuda, gpu, or cuda:<index>")
+        cuda_provider = ("CUDAExecutionProvider", {"device_id": int(device_index)})
+        if not cuda_available:
+            raise RuntimeError(
+                f"{setting_name}={requested} was requested, but onnxruntime CUDAExecutionProvider is not available"
+            )
+        return [cuda_provider, "CPUExecutionProvider"], True
+
+    if value in {"cuda", "gpu"}:
+        if not cuda_available:
+            raise RuntimeError(
+                f"{setting_name}={requested} was requested, but onnxruntime CUDAExecutionProvider is not available"
+            )
+        return [cuda_provider, "CPUExecutionProvider"], True
+
+    if value == "auto":
+        if cuda_available:
+            return [cuda_provider, "CPUExecutionProvider"], True
+        return ["CPUExecutionProvider"], False
+
+    if value == "cpu":
+        return ["CPUExecutionProvider"], False
+
+    raise RuntimeError(f"{setting_name} must be auto, cpu, cuda, gpu, or cuda:<index>")
+
+
 def wake_words_display() -> str:
     return " / ".join(WAKE_WORDS)
 
@@ -339,17 +408,30 @@ def create_kws() -> Any:
     require_file(KWS_MODEL_DIR / "decoder-epoch-13-avg-2-chunk-8-left-64.onnx")
     require_file(KWS_MODEL_DIR / "joiner-epoch-13-avg-2-chunk-8-left-64.int8.onnx")
 
-    return sherpa_onnx.KeywordSpotter(
-        tokens=str(KWS_MODEL_DIR / "tokens.txt"),
-        encoder=str(KWS_MODEL_DIR / "encoder-epoch-13-avg-2-chunk-8-left-64.int8.onnx"),
-        decoder=str(KWS_MODEL_DIR / "decoder-epoch-13-avg-2-chunk-8-left-64.onnx"),
-        joiner=str(KWS_MODEL_DIR / "joiner-epoch-13-avg-2-chunk-8-left-64.int8.onnx"),
-        num_threads=KWS_THREADS,
-        keywords_file=str(keywords_file),
-        keywords_score=KWS_KEYWORDS_SCORE,
-        keywords_threshold=KWS_KEYWORDS_THRESHOLD,
-        provider="cpu",
+    def build(provider: str) -> Any:
+        return sherpa_onnx.KeywordSpotter(
+            tokens=str(KWS_MODEL_DIR / "tokens.txt"),
+            encoder=str(KWS_MODEL_DIR / "encoder-epoch-13-avg-2-chunk-8-left-64.int8.onnx"),
+            decoder=str(KWS_MODEL_DIR / "decoder-epoch-13-avg-2-chunk-8-left-64.onnx"),
+            joiner=str(KWS_MODEL_DIR / "joiner-epoch-13-avg-2-chunk-8-left-64.int8.onnx"),
+            num_threads=KWS_THREADS,
+            keywords_file=str(keywords_file),
+            keywords_score=KWS_KEYWORDS_SCORE,
+            keywords_threshold=KWS_KEYWORDS_THRESHOLD,
+            provider=provider,
+        )
+
+    spotter, provider = create_with_sherpa_provider(
+        "KWS",
+        "VOICE_KWS_PROVIDER",
+        VOICE_KWS_PROVIDER,
+        build,
     )
+    log(
+        "KWS config: "
+        f"model={KWS_MODEL_DIR} provider={provider} requested={VOICE_KWS_PROVIDER} threads={KWS_THREADS}"
+    )
+    return spotter
 
 
 def asr_model_file(stem: str) -> Path:
@@ -655,29 +737,39 @@ def create_sherpa_asr() -> StreamingRecognizer:
     log(
         "ASR config: "
         f"precision={ASR_MODEL_PRECISION} decoding={ASR_DECODING_METHOD} "
-        f"max_active_paths={ASR_MAX_ACTIVE_PATHS} hotwords={HOTWORDS_PATH}"
+        f"max_active_paths={ASR_MAX_ACTIVE_PATHS} hotwords={HOTWORDS_PATH} "
+        f"device={VOICE_ASR_DEVICE}"
     )
 
-    recognizer = sherpa_onnx.OnlineRecognizer.from_transducer(
-        tokens=str(ASR_MODEL_DIR / "tokens.txt"),
-        encoder=str(encoder),
-        decoder=str(decoder),
-        joiner=str(joiner),
-        num_threads=ASR_THREADS,
-        sample_rate=SAMPLE_RATE,
-        feature_dim=80,
-        enable_endpoint_detection=True,
-        rule1_min_trailing_silence=ASR_RULE1_MIN_TRAILING_SILENCE,
-        rule2_min_trailing_silence=ASR_RULE2_MIN_TRAILING_SILENCE,
-        rule3_min_utterance_length=ASR_RULE3_MIN_UTTERANCE_LENGTH,
-        decoding_method=ASR_DECODING_METHOD,
-        max_active_paths=ASR_MAX_ACTIVE_PATHS,
-        hotwords_file=hotwords_file,
-        hotwords_score=ASR_HOTWORDS_SCORE,
-        modeling_unit=ASR_MODELING_UNIT,
-        bpe_vocab=str(bpe_vocab) if bpe_vocab.is_file() else "",
-        provider="cpu",
+    def build(provider: str) -> Any:
+        return sherpa_onnx.OnlineRecognizer.from_transducer(
+            tokens=str(ASR_MODEL_DIR / "tokens.txt"),
+            encoder=str(encoder),
+            decoder=str(decoder),
+            joiner=str(joiner),
+            num_threads=ASR_THREADS,
+            sample_rate=SAMPLE_RATE,
+            feature_dim=80,
+            enable_endpoint_detection=True,
+            rule1_min_trailing_silence=ASR_RULE1_MIN_TRAILING_SILENCE,
+            rule2_min_trailing_silence=ASR_RULE2_MIN_TRAILING_SILENCE,
+            rule3_min_utterance_length=ASR_RULE3_MIN_UTTERANCE_LENGTH,
+            decoding_method=ASR_DECODING_METHOD,
+            max_active_paths=ASR_MAX_ACTIVE_PATHS,
+            hotwords_file=hotwords_file,
+            hotwords_score=ASR_HOTWORDS_SCORE,
+            modeling_unit=ASR_MODELING_UNIT,
+            bpe_vocab=str(bpe_vocab) if bpe_vocab.is_file() else "",
+            provider=provider,
+        )
+
+    recognizer, provider = create_with_sherpa_provider(
+        "Sherpa ASR",
+        "VOICE_ASR_DEVICE",
+        VOICE_ASR_DEVICE,
+        build,
     )
+    log(f"Sherpa ASR loaded: provider={provider} requested={VOICE_ASR_DEVICE}")
     return SherpaStreamingRecognizer(recognizer)
 
 
@@ -701,18 +793,8 @@ def create_sensevoice_asr() -> StreamingRecognizer:
         vad_cmvn_path = SENSEVOICE_VAD_MODEL_DIR / "am.mvn"
     require_file(vad_cmvn_path)
 
-    available_providers = set(onnxruntime.get_available_providers())
-    cuda_provider_available = "CUDAExecutionProvider" in available_providers
-    if VOICE_ASR_DEVICE in {"cuda", "gpu"} or VOICE_ASR_DEVICE.startswith("cuda:"):
-        if not cuda_provider_available:
-            raise RuntimeError(
-                "VOICE_ASR_DEVICE=cuda was requested, but onnxruntime CUDAExecutionProvider is not available"
-            )
-        use_cuda = True
-    elif VOICE_ASR_DEVICE == "auto":
-        use_cuda = cuda_provider_available
-    else:
-        use_cuda = False
+    available_providers = onnxruntime.get_available_providers()
+    providers, use_cuda = onnxruntime_providers("VOICE_ASR_DEVICE", VOICE_ASR_DEVICE, available_providers)
     config = StreamingASRConfig(
         lang=os.getenv("SENSEVOICE_LANGUAGE", "auto"),
         itn_min_speech_time_ms=env_int("SENSEVOICE_ITN_MIN_SPEECH_MS"),
@@ -727,11 +809,10 @@ def create_sensevoice_asr() -> StreamingRecognizer:
     log(
         "SenseVoice streaming ASR config: "
         f"model={SENSEVOICE_MODEL_DIR} vad={SENSEVOICE_VAD_MODEL_DIR} "
-        f"device={VOICE_ASR_DEVICE} cuda={use_cuda} providers={','.join(onnxruntime.get_available_providers())} "
+        f"device={VOICE_ASR_DEVICE} cuda={use_cuda} providers={','.join(available_providers)} "
         f"lang={config.lang} "
         f"vad_start={config.vad_start_threshold} vad_end={config.vad_end_threshold}"
     )
-    providers = ["CUDAExecutionProvider", "CPUExecutionProvider"] if use_cuda else ["CPUExecutionProvider"]
 
     def make_fbank_options() -> Any:
         fbank_opts = knf.FbankOptions()
@@ -771,7 +852,7 @@ def create_sensevoice_asr() -> StreamingRecognizer:
     vad_model.cmvn = load_cmvn(str(vad_cmvn_path))
     vad_model.model_inference_session = onnxruntime.InferenceSession(
         str(SENSEVOICE_VAD_MODEL_DIR / "model_quant.onnx"),
-        providers=["CPUExecutionProvider"],
+        providers=providers,
     )
     vad_model.fbank_opts = make_fbank_options()
     vad_model.lfr_m = 5
@@ -1056,19 +1137,32 @@ def create_sherpa_tts() -> TextToSpeech:
         length_scale=SHERPA_TTS_LENGTH_SCALE,
         noise_scale=SHERPA_TTS_NOISE_SCALE,
     )
-    model_config = sherpa_onnx.OfflineTtsModelConfig(
-        matcha=matcha,
-        num_threads=SHERPA_TTS_THREADS,
-        provider=SHERPA_TTS_PROVIDER,
+
+    def build(provider: str) -> Any:
+        model_config = sherpa_onnx.OfflineTtsModelConfig(
+            matcha=matcha,
+            num_threads=SHERPA_TTS_THREADS,
+            provider=provider,
+        )
+        config = sherpa_onnx.OfflineTtsConfig(
+            model=model_config,
+            rule_fsts=",".join(rule_fsts),
+            max_num_sentences=1,
+            silence_scale=SHERPA_TTS_SILENCE_SCALE,
+        )
+        return sherpa_onnx.OfflineTts(config)
+
+    tts, provider = create_with_sherpa_provider(
+        "Sherpa TTS",
+        "SHERPA_TTS_PROVIDER",
+        SHERPA_TTS_PROVIDER,
+        build,
     )
-    config = sherpa_onnx.OfflineTtsConfig(
-        model=model_config,
-        rule_fsts=",".join(rule_fsts),
-        max_num_sentences=1,
-        silence_scale=SHERPA_TTS_SILENCE_SCALE,
+    log(
+        "Sherpa TTS loaded: "
+        f"provider={provider} requested={SHERPA_TTS_PROVIDER} "
+        f"sample_rate={tts.sample_rate} elapsed={time.monotonic() - started:.2f}s"
     )
-    tts = sherpa_onnx.OfflineTts(config)
-    log(f"Sherpa TTS loaded: sample_rate={tts.sample_rate} elapsed={time.monotonic() - started:.2f}s")
     return SherpaTTS(tts)
 
 
@@ -1109,19 +1203,32 @@ def create_melotts_tts() -> TextToSpeech:
         noise_scale_w=MELOTTS_NOISE_W_SCALE,
         length_scale=MELOTTS_LENGTH_SCALE,
     )
-    model_config = sherpa_onnx.OfflineTtsModelConfig(
-        vits=vits,
-        num_threads=MELOTTS_THREADS,
-        provider=MELOTTS_PROVIDER,
+
+    def build(provider: str) -> Any:
+        model_config = sherpa_onnx.OfflineTtsModelConfig(
+            vits=vits,
+            num_threads=MELOTTS_THREADS,
+            provider=provider,
+        )
+        config = sherpa_onnx.OfflineTtsConfig(
+            model=model_config,
+            rule_fsts=",".join(rule_fsts),
+            max_num_sentences=1,
+            silence_scale=MELOTTS_SILENCE_SCALE,
+        )
+        return sherpa_onnx.OfflineTts(config)
+
+    tts, provider = create_with_sherpa_provider(
+        "MeloTTS",
+        "MELOTTS_PROVIDER",
+        MELOTTS_PROVIDER,
+        build,
     )
-    config = sherpa_onnx.OfflineTtsConfig(
-        model=model_config,
-        rule_fsts=",".join(rule_fsts),
-        max_num_sentences=1,
-        silence_scale=MELOTTS_SILENCE_SCALE,
+    log(
+        "MeloTTS loaded: "
+        f"provider={provider} requested={MELOTTS_PROVIDER} "
+        f"sample_rate={tts.sample_rate} elapsed={time.monotonic() - started:.2f}s"
     )
-    tts = sherpa_onnx.OfflineTts(config)
-    log(f"MeloTTS loaded: sample_rate={tts.sample_rate} elapsed={time.monotonic() - started:.2f}s")
     return SherpaTTSWithSpeaker(tts, MELOTTS_SPEAKER, MELOTTS_SPEED)
 
 

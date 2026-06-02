@@ -232,6 +232,7 @@ required_files_ok() {
 
 kws_runtime_ok() {
   python3 - "$KWS_MODEL" "$WAKE_WORDS" <<'PY'
+import os
 import subprocess
 import sys
 import tempfile
@@ -244,6 +245,30 @@ wake_words = [word.strip() for word in sys.argv[2].split(",") if word.strip()]
 if not wake_words:
     print("WAKE_WORDS must contain at least one wake word", file=sys.stderr)
     sys.exit(1)
+
+
+def provider_candidates(name, requested):
+    value = (requested or "auto").strip().lower() or "auto"
+    if value == "auto":
+        return value, ("cuda", "cpu")
+    if value in {"cuda", "gpu"}:
+        return value, ("cuda",)
+    if value == "cpu":
+        return value, ("cpu",)
+    print(f"{name} must be auto, cpu, cuda, or gpu", file=sys.stderr)
+    sys.exit(1)
+
+
+def create_keyword_spotter(provider, keywords):
+    return sherpa_onnx.KeywordSpotter(
+        tokens=f"{model_dir}/tokens.txt",
+        encoder=f"{model_dir}/encoder-epoch-13-avg-2-chunk-8-left-64.int8.onnx",
+        decoder=f"{model_dir}/decoder-epoch-13-avg-2-chunk-8-left-64.onnx",
+        joiner=f"{model_dir}/joiner-epoch-13-avg-2-chunk-8-left-64.int8.onnx",
+        num_threads=1,
+        keywords_file=str(keywords),
+        provider=provider,
+    )
 
 try:
     with tempfile.TemporaryDirectory() as tmp_dir:
@@ -267,15 +292,19 @@ try:
             check=True,
         )
 
-        sherpa_onnx.KeywordSpotter(
-            tokens=f"{model_dir}/tokens.txt",
-            encoder=f"{model_dir}/encoder-epoch-13-avg-2-chunk-8-left-64.int8.onnx",
-            decoder=f"{model_dir}/decoder-epoch-13-avg-2-chunk-8-left-64.onnx",
-            joiner=f"{model_dir}/joiner-epoch-13-avg-2-chunk-8-left-64.int8.onnx",
-            num_threads=1,
-            keywords_file=str(keywords),
-            provider="cpu",
-        )
+        requested, providers = provider_candidates("VOICE_KWS_PROVIDER", os.getenv("VOICE_KWS_PROVIDER", "auto"))
+        cuda_error = None
+        for provider in providers:
+            try:
+                create_keyword_spotter(provider, keywords)
+                break
+            except Exception as exc:
+                if requested == "auto" and provider == "cuda":
+                    cuda_error = exc
+                    continue
+                raise
+        else:
+            raise RuntimeError(f"KWS failed with VOICE_KWS_PROVIDER=auto; CUDA error: {cuda_error}")
 except Exception as exc:
     print(f"Invalid KWS model: {model_dir}: {exc}", file=sys.stderr)
     sys.exit(1)
@@ -285,6 +314,7 @@ PY
 asr_runtime_ok() {
   python3 - "$ASR_MODEL" "$AUDIO_SAMPLE_RATE" "${ASR_MODEL_PRECISION:-fp32}" "${ASR_DECODING_METHOD:-modified_beam_search}" "${ASR_MAX_ACTIVE_PATHS:-8}" <<'PY'
 import sys
+import os
 import sherpa_onnx
 
 model_dir = sys.argv[1]
@@ -293,8 +323,22 @@ precision = sys.argv[3].strip().lower()
 decoding_method = sys.argv[4]
 max_active_paths = int(sys.argv[5])
 suffix = ".int8.onnx" if precision in {"int8", "quantized"} else ".onnx"
-try:
-    sherpa_onnx.OnlineRecognizer.from_transducer(
+
+
+def provider_candidates(name, requested):
+    value = (requested or "auto").strip().lower() or "auto"
+    if value == "auto":
+        return value, ("cuda", "cpu")
+    if value in {"cuda", "gpu"}:
+        return value, ("cuda",)
+    if value == "cpu":
+        return value, ("cpu",)
+    print(f"{name} must be auto, cpu, cuda, or gpu for Sherpa ASR", file=sys.stderr)
+    sys.exit(1)
+
+
+def create_recognizer(provider):
+    return sherpa_onnx.OnlineRecognizer.from_transducer(
         tokens=f"{model_dir}/tokens.txt",
         encoder=f"{model_dir}/encoder-epoch-99-avg-1{suffix}",
         decoder=f"{model_dir}/decoder-epoch-99-avg-1{suffix}",
@@ -305,8 +349,23 @@ try:
         enable_endpoint_detection=True,
         decoding_method=decoding_method,
         max_active_paths=max_active_paths,
-        provider="cpu",
+        provider=provider,
     )
+
+try:
+    requested, providers = provider_candidates("VOICE_ASR_DEVICE", os.getenv("VOICE_ASR_DEVICE", "auto"))
+    cuda_error = None
+    for provider in providers:
+        try:
+            create_recognizer(provider)
+            break
+        except Exception as exc:
+            if requested == "auto" and provider == "cuda":
+                cuda_error = exc
+                continue
+            raise
+    else:
+        raise RuntimeError(f"Sherpa ASR failed with VOICE_ASR_DEVICE=auto; CUDA error: {cuda_error}")
 except Exception as exc:
     print(f"Invalid ASR model: {model_dir}: {exc}", file=sys.stderr)
     sys.exit(1)
