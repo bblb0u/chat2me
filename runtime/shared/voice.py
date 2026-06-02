@@ -119,6 +119,13 @@ ASR_PREROLL_SECONDS = env_float("ASR_PREROLL_SECONDS")
 ASR_WARMUP_SECONDS = env_float_default("ASR_WARMUP_SECONDS", "0")
 ASR_WARMUP_WAV_PATH_RAW = os.getenv("ASR_WARMUP_WAV_PATH", "").strip()
 ASR_WARMUP_WAV_PATH = Path(ASR_WARMUP_WAV_PATH_RAW) if ASR_WARMUP_WAV_PATH_RAW else None
+ASR_BUNDLED_WARMUP_WAV_PATH_RAW = os.getenv(
+    "ASR_BUNDLED_WARMUP_WAV_PATH",
+    "/app/assets/asr_warmup_16k.wav",
+).strip()
+ASR_BUNDLED_WARMUP_WAV_PATH = (
+    Path(ASR_BUNDLED_WARMUP_WAV_PATH_RAW) if ASR_BUNDLED_WARMUP_WAV_PATH_RAW else None
+)
 ONLINE_ASR_BASE_URL = os.getenv("ONLINE_ASR_BASE_URL", "").strip().rstrip("/")
 ONLINE_ASR_TRANSCRIPTIONS_PATH = os.getenv("ONLINE_ASR_TRANSCRIPTIONS_PATH", "/audio/transcriptions").strip() or "/audio/transcriptions"
 if not ONLINE_ASR_TRANSCRIPTIONS_PATH.startswith("/"):
@@ -1011,6 +1018,17 @@ def warmup_streaming_asr(recognizer: StreamingRecognizer, seconds: float) -> tup
     return len(samples), elapsed
 
 
+def run_warmup_wav_asr(recognizer: StreamingRecognizer, path: Path, source: str) -> None:
+    samples, sample_rate = read_wav_file(path)
+    text, elapsed = warmup_audio_asr(recognizer, samples, sample_rate)
+    log(
+        "asr warmup: "
+        f"engine={VOICE_ASR_ENGINE} wav={path} source={source} "
+        f"audio_seconds={len(samples) / max(1, sample_rate):.2f} "
+        f"text_chars={len(text)} elapsed={elapsed:.2f}s"
+    )
+
+
 def warmup_asr(recognizer: StreamingRecognizer) -> None:
     seconds = ASR_WARMUP_SECONDS
     if seconds <= 0:
@@ -1019,17 +1037,22 @@ def warmup_asr(recognizer: StreamingRecognizer) -> None:
     started = time.monotonic()
     try:
         if ASR_WARMUP_WAV_PATH is not None:
-            if not ASR_WARMUP_WAV_PATH.is_file():
-                log(f"asr warmup skipped: missing wav={ASR_WARMUP_WAV_PATH}")
+            if ASR_WARMUP_WAV_PATH.is_file():
+                run_warmup_wav_asr(recognizer, ASR_WARMUP_WAV_PATH, "configured")
                 return
-            samples, sample_rate = read_wav_file(ASR_WARMUP_WAV_PATH)
-            text, elapsed = warmup_audio_asr(recognizer, samples, sample_rate)
-            log(
-                "asr warmup: "
-                f"engine={VOICE_ASR_ENGINE} wav={ASR_WARMUP_WAV_PATH} "
-                f"audio_seconds={len(samples) / max(1, sample_rate):.2f} "
-                f"text_chars={len(text)} elapsed={elapsed:.2f}s"
-            )
+            if (
+                isinstance(recognizer, SenseVoiceStreamingRecognizer)
+                and ASR_BUNDLED_WARMUP_WAV_PATH is not None
+                and ASR_BUNDLED_WARMUP_WAV_PATH.is_file()
+            ):
+                log(
+                    "asr warmup configured wav missing; "
+                    f"using bundled wav={ASR_BUNDLED_WARMUP_WAV_PATH} "
+                    f"configured_wav={ASR_WARMUP_WAV_PATH}"
+                )
+                run_warmup_wav_asr(recognizer, ASR_BUNDLED_WARMUP_WAV_PATH, "bundled")
+                return
+            log(f"asr warmup skipped: missing wav={ASR_WARMUP_WAV_PATH}")
             return
 
         if isinstance(recognizer, (OnlineBatchRecognizer, RemoteBatchRecognizer)):
@@ -1037,7 +1060,10 @@ def warmup_asr(recognizer: StreamingRecognizer) -> None:
             return
 
         if isinstance(recognizer, SenseVoiceStreamingRecognizer):
-            log("asr warmup skipped: SenseVoice requires ASR_WARMUP_WAV_PATH")
+            if ASR_BUNDLED_WARMUP_WAV_PATH is not None and ASR_BUNDLED_WARMUP_WAV_PATH.is_file():
+                run_warmup_wav_asr(recognizer, ASR_BUNDLED_WARMUP_WAV_PATH, "bundled")
+                return
+            log("asr warmup skipped: SenseVoice requires ASR_WARMUP_WAV_PATH or bundled warmup WAV")
             return
 
         samples, elapsed = warmup_streaming_asr(recognizer, seconds)

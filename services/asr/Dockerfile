@@ -43,6 +43,7 @@ RUN find /opt/chat2me-deps -type f -name "*.sh" -exec chmod +x {} + \
     && /opt/chat2me-deps/install.sh "$VOICE_RUNTIME_FEATURES"
 
 COPY config /defaults/config
+COPY runtime/assets /app/assets
 COPY runtime/entrypoints/audio.sh /entrypoint.sh
 COPY runtime/shared/common.py ./app/common.py
 COPY runtime/shared/voice.py ./app/voice.py
