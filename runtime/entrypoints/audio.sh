@@ -535,6 +535,7 @@ ensure_kws_runtime() {
 
 ensure_sherpa_asr_runtime() {
   ensure_kws_runtime
+  require_python_module pypinyin
 }
 
 ensure_sherpa_tts_runtime() {

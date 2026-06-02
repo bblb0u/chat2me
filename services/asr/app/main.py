@@ -6,6 +6,7 @@ import os
 import time
 import threading
 import wave
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 
 import httpx
@@ -64,7 +65,6 @@ class TranscribeResponse(BaseModel):
     latency_ms: int
 
 
-app = FastAPI(title="Chat2Me ASR", version="0.1.0")
 ONLINE_REACHABILITY = Reachability(online=False, status="not_checked")
 ONLINE_REACHABILITY_TASK: asyncio.Task[None] | None = None
 LOCAL_RECOGNIZER: voice.StreamingRecognizer | None = None
@@ -164,7 +164,6 @@ async def reachability_loop() -> None:
         await asyncio.sleep(interval)
 
 
-@app.on_event("startup")
 async def startup() -> None:
     global LOCAL_RECOGNIZER, ONLINE_RECOGNIZER, ONLINE_REACHABILITY, ONLINE_REACHABILITY_TASK
     LOCAL_RECOGNIZER = create_local_recognizer()
@@ -174,7 +173,6 @@ async def startup() -> None:
         ONLINE_REACHABILITY_TASK = asyncio.create_task(reachability_loop())
 
 
-@app.on_event("shutdown")
 async def shutdown() -> None:
     if ONLINE_REACHABILITY_TASK is None:
         return
@@ -183,6 +181,18 @@ async def shutdown() -> None:
         await ONLINE_REACHABILITY_TASK
     except asyncio.CancelledError:
         pass
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await startup()
+    try:
+        yield
+    finally:
+        await shutdown()
+
+
+app = FastAPI(title="Chat2Me ASR", version="0.1.0", lifespan=lifespan)
 
 
 @app.get("/health", response_model=HealthResponse)

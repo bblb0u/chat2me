@@ -5,6 +5,7 @@ import json
 import os
 import re
 import time
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -135,9 +136,6 @@ class ReachabilityResponse(BaseModel):
     model: str | None
     status: str
     checked_at: float | None = None
-
-
-app = FastAPI(title="Chat2Me LLM", version="0.1.0")
 
 
 class LLMConfigError(Exception):
@@ -444,7 +442,6 @@ async def remote_reachability_loop() -> None:
         await asyncio.sleep(interval)
 
 
-@app.on_event("startup")
 async def start_remote_reachability_loop() -> None:
     global REMOTE_REACHABILITY_TASK, REMOTE_REACHABILITY
     if provider_is_online():
@@ -452,7 +449,6 @@ async def start_remote_reachability_loop() -> None:
         REMOTE_REACHABILITY_TASK = asyncio.create_task(remote_reachability_loop())
 
 
-@app.on_event("shutdown")
 async def stop_remote_reachability_loop() -> None:
     if REMOTE_REACHABILITY_TASK is None:
         return
@@ -461,6 +457,18 @@ async def stop_remote_reachability_loop() -> None:
         await REMOTE_REACHABILITY_TASK
     except asyncio.CancelledError:
         pass
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await start_remote_reachability_loop()
+    try:
+        yield
+    finally:
+        await stop_remote_reachability_loop()
+
+
+app = FastAPI(title="Chat2Me LLM", version="0.1.0", lifespan=lifespan)
 
 
 @app.get("/llm/reachability", response_model=ReachabilityResponse)
