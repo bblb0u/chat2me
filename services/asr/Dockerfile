@@ -1,6 +1,7 @@
 FROM ubuntu:20.04
 
 ARG VOICE_RUNTIME_FEATURES="asr-sensevoice asr-sherpa"
+ARG JETSON_L4T_PLATFORM=t234
 ARG CHAT2ME_DOWNLOAD_RETRIES=10
 ARG CHAT2ME_GIT_RETRIES=5
 ARG CHAT2ME_PIP_RETRIES=10
@@ -37,6 +38,7 @@ RUN . /opt/chat2me-deps/lib/common.sh \
 
 COPY runtime/deps/install.sh /opt/chat2me-deps/install.sh
 COPY runtime/deps/asr /opt/chat2me-deps/asr
+COPY runtime/deps/platform /opt/chat2me-deps/platform
 RUN find /opt/chat2me-deps -type f -name "*.sh" -exec chmod +x {} + \
     && /opt/chat2me-deps/install.sh "$VOICE_RUNTIME_FEATURES"
 

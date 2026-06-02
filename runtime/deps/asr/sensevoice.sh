@@ -3,10 +3,17 @@ set -eu
 
 . /opt/chat2me-deps/lib/common.sh
 
+/opt/chat2me-deps/platform/jetson_gpu.sh
+
+ONNXRUNTIME_GPU_WHEEL_URL="${ASR_ONNXRUNTIME_GPU_WHEEL_URL:-https://nvidia.box.com/shared/static/iizg3ggrtdkqawkmebbfixo7sce6j365.whl}"
+ONNXRUNTIME_GPU_WHEEL="/tmp/onnxruntime_gpu-1.16.0-cp38-cp38-linux_aarch64.whl"
+
+download_file "$ONNXRUNTIME_GPU_WHEEL_URL" "$ONNXRUNTIME_GPU_WHEEL" "onnxruntime GPU wheel"
+
 pip_install \
   "kaldi_native_fbank" \
   "onnx==1.16.1" \
-  "onnxruntime==1.16.3" \
+  "$ONNXRUNTIME_GPU_WHEEL" \
   "https://github.com/nikoseven/sense-voice-streaming-asr/archive/51b503efa0e373828da61f472d75850f95e53660.tar.gz" \
   "sentencepiece"
 

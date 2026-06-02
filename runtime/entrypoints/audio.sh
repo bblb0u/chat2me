@@ -533,9 +533,31 @@ ensure_kws_runtime() {
   require_command sherpa-onnx-cli
 }
 
+sherpa_gpu_runtime_ok() {
+  python3 <<'PY'
+import sys
+from pathlib import Path
+
+import sherpa_onnx
+
+root = Path(sherpa_onnx.__file__).resolve().parent
+needle = b"Please compile with -DSHERPA_ONNX_ENABLE_GPU=ON"
+for lib in (root / "lib").glob("*.so"):
+    try:
+        if needle in lib.read_bytes():
+            sys.exit(1)
+    except OSError:
+        pass
+sys.exit(0)
+PY
+}
+
 ensure_sherpa_asr_runtime() {
   ensure_kws_runtime
   require_python_module pypinyin
+  case "$(normalize_key "${VOICE_ASR_DEVICE:-auto}")" in
+    cuda|gpu|cuda:*) sherpa_gpu_runtime_ok || missing_image_dependency "Sherpa ONNX GPU runtime" ;;
+  esac
 }
 
 ensure_sherpa_tts_runtime() {

@@ -29,6 +29,14 @@ def env_float_compat(primary_key: str, fallback_key: str, default: str) -> float
         raise RuntimeError(f"{primary_key} must be a number in runtime.env") from None
 
 
+def env_float_default(key: str, default: str) -> float:
+    value = os.getenv(key, default).strip() or default
+    try:
+        return float(value)
+    except ValueError:
+        raise RuntimeError(f"{key} must be a number in runtime.env") from None
+
+
 MODELS_DIR = Path(os.getenv("MODELS_DIR", "/models"))
 VOICE_KWS_MODEL = "sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20"
 VOICE_ASR_ENGINE = env_value("VOICE_ASR_ENGINE")
@@ -108,6 +116,9 @@ ASR_NOISE_GATE_PERCENTILE = env_float("ASR_NOISE_GATE_PERCENTILE")
 ASR_NOISE_GATE_RATIO = env_float("ASR_NOISE_GATE_RATIO")
 ASR_NOISE_GATE_OFFSET = env_float("ASR_NOISE_GATE_OFFSET")
 ASR_PREROLL_SECONDS = env_float("ASR_PREROLL_SECONDS")
+ASR_WARMUP_SECONDS = env_float_default("ASR_WARMUP_SECONDS", "0")
+ASR_WARMUP_WAV_PATH_RAW = os.getenv("ASR_WARMUP_WAV_PATH", "").strip()
+ASR_WARMUP_WAV_PATH = Path(ASR_WARMUP_WAV_PATH_RAW) if ASR_WARMUP_WAV_PATH_RAW else None
 ONLINE_ASR_BASE_URL = os.getenv("ONLINE_ASR_BASE_URL", "").strip().rstrip("/")
 ONLINE_ASR_TRANSCRIPTIONS_PATH = os.getenv("ONLINE_ASR_TRANSCRIPTIONS_PATH", "/audio/transcriptions").strip() or "/audio/transcriptions"
 if not ONLINE_ASR_TRANSCRIPTIONS_PATH.startswith("/"):
@@ -291,6 +302,20 @@ def sherpa_provider_candidates(setting_name: str, requested: str) -> tuple[str, 
     raise RuntimeError(f"{setting_name} must be auto, cpu, cuda, or gpu")
 
 
+def sherpa_gpu_build_unavailable() -> bool:
+    import sherpa_onnx
+
+    root = Path(sherpa_onnx.__file__).resolve().parent
+    needle = b"Please compile with -DSHERPA_ONNX_ENABLE_GPU=ON"
+    for lib in (root / "lib").glob("*.so"):
+        try:
+            if needle in lib.read_bytes():
+                return True
+        except OSError:
+            continue
+    return False
+
+
 def create_with_sherpa_provider(
     label: str,
     setting_name: str,
@@ -309,6 +334,9 @@ def create_with_sherpa_provider(
             raise RuntimeError(f"{label} failed with {setting_name}={provider}: {exc}") from exc
         if cuda_error is not None and provider == "cpu":
             log(f"{label} CUDA provider is unavailable for auto; using CPU: {cuda_error}")
+        if provider == "cuda" and sherpa_gpu_build_unavailable():
+            log(f"{label} CUDA provider is not enabled in this sherpa-onnx wheel; using CPU fallback")
+            return instance, "cpu-fallback"
         return instance, provider
     raise RuntimeError(f"{label} failed to initialize with {setting_name}=auto")
 
@@ -830,6 +858,23 @@ def create_sensevoice_asr() -> StreamingRecognizer:
     asr_model = SimpleNamespace()
     asr_model.cmvn = load_cmvn(str(SENSEVOICE_MODEL_DIR / "am.mvn"))
     asr_model.sensevoice_tokens = json.loads((SENSEVOICE_MODEL_DIR / "tokens.json").read_text(encoding="utf-8"))
+
+    def ctc_tokens_to_text(tokens: Iterable[Any], prev_token_id: Any = None, filter_special_token: bool = True) -> str:
+        merged_tokens: list[int] = []
+        previous = int(prev_token_id) if prev_token_id is not None else None
+        for token in tokens:
+            token_id = int(token)
+            if token_id == previous:
+                continue
+            previous = token_id
+            if token_id != 0:
+                merged_tokens.append(token_id)
+        pieces = [asr_model.sensevoice_tokens[token_id] for token_id in merged_tokens]
+        if filter_special_token:
+            pieces = [piece for piece in pieces if not str(piece).startswith("<|")]
+        return "".join(str(piece) for piece in pieces).replace("▁", " ")
+
+    asr_model.ctc_tokens_to_text = ctc_tokens_to_text
     asr_model.model_inference_session = onnxruntime.InferenceSession(
         str(SENSEVOICE_MODEL_DIR / "model_quant.onnx"),
         providers=providers,
@@ -930,6 +975,83 @@ def create_asr() -> StreamingRecognizer:
 def create_remote_asr() -> StreamingRecognizer:
     log(f"remote ASR service: {ASR_SERVICE_URL}")
     return RemoteBatchRecognizer()
+
+
+def read_wav_file(path: Path) -> tuple[np.ndarray, int]:
+    with wave.open(str(path), "rb") as wav:
+        channels = wav.getnchannels()
+        sample_width = wav.getsampwidth()
+        sample_rate = wav.getframerate()
+        frames = wav.readframes(wav.getnframes())
+    if sample_width != 2:
+        raise RuntimeError(f"ASR warmup WAV must be 16-bit PCM: {path}")
+    data = np.frombuffer(frames, dtype=np.int16).astype(np.float32) / 32767.0
+    if channels > 1:
+        data = data.reshape(-1, channels).mean(axis=1)
+    return data.astype(np.float32, copy=False), int(sample_rate)
+
+
+def warmup_audio_asr(recognizer: StreamingRecognizer, samples: np.ndarray, sample_rate: int) -> tuple[str, float]:
+    stream = recognizer.create_stream()
+    started = time.monotonic()
+    try:
+        chunk = max(1, int(sample_rate * CHUNK_SECONDS))
+        for offset in range(0, len(samples), chunk):
+            recognizer.accept_waveform(stream, sample_rate, samples[offset : offset + chunk])
+        recognizer.input_finished(stream)
+        text = recognizer.decode_ready(stream)
+    finally:
+        del stream
+    return text, time.monotonic() - started
+
+
+def warmup_streaming_asr(recognizer: StreamingRecognizer, seconds: float) -> tuple[int, float]:
+    samples = np.zeros(max(1, int(SAMPLE_RATE * seconds)), dtype=np.float32)
+    _, elapsed = warmup_audio_asr(recognizer, samples, SAMPLE_RATE)
+    return len(samples), elapsed
+
+
+def warmup_asr(recognizer: StreamingRecognizer) -> None:
+    seconds = ASR_WARMUP_SECONDS
+    if seconds <= 0:
+        return
+
+    started = time.monotonic()
+    try:
+        if ASR_WARMUP_WAV_PATH is not None:
+            if not ASR_WARMUP_WAV_PATH.is_file():
+                log(f"asr warmup skipped: missing wav={ASR_WARMUP_WAV_PATH}")
+                return
+            samples, sample_rate = read_wav_file(ASR_WARMUP_WAV_PATH)
+            text, elapsed = warmup_audio_asr(recognizer, samples, sample_rate)
+            log(
+                "asr warmup: "
+                f"engine={VOICE_ASR_ENGINE} wav={ASR_WARMUP_WAV_PATH} "
+                f"audio_seconds={len(samples) / max(1, sample_rate):.2f} "
+                f"text_chars={len(text)} elapsed={elapsed:.2f}s"
+            )
+            return
+
+        if isinstance(recognizer, (OnlineBatchRecognizer, RemoteBatchRecognizer)):
+            log(f"asr warmup skipped: engine={VOICE_ASR_ENGINE}")
+            return
+
+        if isinstance(recognizer, SenseVoiceStreamingRecognizer):
+            log("asr warmup skipped: SenseVoice requires ASR_WARMUP_WAV_PATH")
+            return
+
+        samples, elapsed = warmup_streaming_asr(recognizer, seconds)
+        log(
+            "asr warmup: "
+            f"engine={VOICE_ASR_ENGINE} seconds={seconds:.2f} samples={samples} "
+            f"elapsed={elapsed:.2f}s"
+        )
+    except Exception as exc:
+        log(
+            "asr warmup failed: "
+            f"engine={VOICE_ASR_ENGINE} model={VOICE_ASR_MODEL} "
+            f"elapsed={time.monotonic() - started:.2f}s error={exc}"
+        )
 
 
 def write_beep(path: Path) -> None:

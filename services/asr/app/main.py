@@ -167,6 +167,7 @@ async def reachability_loop() -> None:
 async def startup() -> None:
     global LOCAL_RECOGNIZER, ONLINE_RECOGNIZER, ONLINE_REACHABILITY, ONLINE_REACHABILITY_TASK
     LOCAL_RECOGNIZER = create_local_recognizer()
+    voice.warmup_asr(LOCAL_RECOGNIZER)
     if online_enabled():
         ONLINE_RECOGNIZER = create_online_recognizer()
         ONLINE_REACHABILITY = await probe_online()
