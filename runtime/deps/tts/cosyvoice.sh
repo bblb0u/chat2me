@@ -8,6 +8,10 @@ set -eu
 
 COSYVOICE_GIT_REF="${COSYVOICE_GIT_REF:-v2.0}"
 
+apt_install_packages \
+  git \
+  libsndfile1
+
 pip_install \
   "conformer==0.3.2" \
   "diffusers==0.29.0" \

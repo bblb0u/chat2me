@@ -6,10 +6,14 @@ set -eu
 /opt/chat2me-deps/platform/jetson_gpu.sh
 /opt/chat2me-deps/platform/jetson_torch.sh
 
+apt_install_packages \
+  libsndfile1
+
 pip_install \
   "einops==0.8.0" \
   "importlib_resources" \
   "librosa==0.10.2" \
+  "pypinyin==0.55.0" \
   "regex" \
   "rjieba==0.2.1" \
   "safetensors" \

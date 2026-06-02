@@ -1,26 +1,41 @@
 #!/bin/sh
 set -eu
 
-features="${1:-sensevoice sherpa melotts piper f5-tts}"
+if [ "$#" -ne 1 ]; then
+  echo "Usage: $0 '<feature...|none>'" >&2
+  exit 2
+fi
+
+features="$1"
+if [ -z "$(printf '%s' "$features" | tr -d '[:space:]')" ]; then
+  echo "VOICE_RUNTIME_FEATURES must be a space-separated feature list or 'none'" >&2
+  exit 2
+fi
 
 for feature in $features; do
   case "$feature" in
-    asr-sherpa|sherpa)
-      /opt/chat2me-deps/shared/sherpa_onnx.sh
+    speech-kws)
+      /opt/chat2me-deps/speech/kws.sh
       ;;
-    asr-sensevoice|sensevoice)
+    asr-sherpa)
+      /opt/chat2me-deps/asr/sherpa.sh
+      ;;
+    asr-sensevoice)
       /opt/chat2me-deps/asr/sensevoice.sh
       ;;
-    tts-piper|piper)
+    tts-piper)
       /opt/chat2me-deps/tts/piper.sh
       ;;
-    tts-melotts|melotts)
-      /opt/chat2me-deps/shared/sherpa_onnx.sh
+    tts-melotts)
+      /opt/chat2me-deps/tts/melotts.sh
       ;;
-    tts-f5|f5|f5-tts)
+    tts-sherpa)
+      /opt/chat2me-deps/tts/sherpa.sh
+      ;;
+    tts-f5)
       /opt/chat2me-deps/tts/f5.sh
       ;;
-    tts-cosyvoice|cosyvoice)
+    tts-cosyvoice)
       /opt/chat2me-deps/tts/cosyvoice.sh
       ;;
     none)

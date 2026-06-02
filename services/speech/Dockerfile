@@ -1,6 +1,6 @@
 FROM ubuntu:20.04
 
-ARG VOICE_RUNTIME_FEATURES="sherpa"
+ARG VOICE_RUNTIME_FEATURES="speech-kws"
 ARG CHAT2ME_DOWNLOAD_RETRIES=10
 ARG CHAT2ME_GIT_RETRIES=5
 ARG CHAT2ME_PIP_RETRIES=10
@@ -41,7 +41,7 @@ RUN . /opt/chat2me-deps/lib/common.sh \
     && pip_install -r requirements.txt
 
 COPY runtime/deps/install.sh /opt/chat2me-deps/install.sh
-COPY runtime/deps/shared /opt/chat2me-deps/shared
+COPY runtime/deps/speech /opt/chat2me-deps/speech
 RUN find /opt/chat2me-deps -type f -name "*.sh" -exec chmod +x {} + \
     && /opt/chat2me-deps/install.sh "$VOICE_RUNTIME_FEATURES"
 

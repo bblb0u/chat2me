@@ -1,6 +1,6 @@
 FROM ubuntu:20.04
 
-ARG VOICE_RUNTIME_FEATURES="sensevoice sherpa"
+ARG VOICE_RUNTIME_FEATURES="asr-sensevoice asr-sherpa"
 ARG CHAT2ME_DOWNLOAD_RETRIES=10
 ARG CHAT2ME_GIT_RETRIES=5
 ARG CHAT2ME_PIP_RETRIES=10
@@ -24,7 +24,6 @@ RUN chmod +x /opt/chat2me-deps/lib/common.sh \
     && apt_install_packages \
        ca-certificates \
        curl \
-       ffmpeg \
        libgomp1 \
        libopenblas-base \
        python3 \
@@ -34,13 +33,9 @@ RUN chmod +x /opt/chat2me-deps/lib/common.sh \
 
 COPY services/asr/requirements.txt requirements.txt
 RUN . /opt/chat2me-deps/lib/common.sh \
-    && pip_install -r requirements.txt \
-    && pip_install fastapi==0.115.6 pydantic==2.10.4 python-multipart==0.0.20 uvicorn[standard]==0.33.0
-
-RUN python3 -m pip install --no-cache-dir eval_type_backport==0.2.2
+    && pip_install -r requirements.txt
 
 COPY runtime/deps/install.sh /opt/chat2me-deps/install.sh
-COPY runtime/deps/shared /opt/chat2me-deps/shared
 COPY runtime/deps/asr /opt/chat2me-deps/asr
 RUN find /opt/chat2me-deps -type f -name "*.sh" -exec chmod +x {} + \
     && /opt/chat2me-deps/install.sh "$VOICE_RUNTIME_FEATURES"

@@ -11,7 +11,8 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl \
     && rm -rf /var/lib/apt/lists/*
 
-RUN pip install --no-cache-dir httpx==0.28.1 pyserial==3.5
+COPY services/relay/requirements.txt requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
 
 COPY config /defaults/config
 COPY runtime/entrypoints/config.sh /entrypoint.sh

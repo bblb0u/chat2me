@@ -508,6 +508,21 @@ sensevoice_runtime_ok() {
 
 ensure_sensevoice_runtime() {
   if sensevoice_runtime_ok; then
+    case "$(normalize_key "${VOICE_ASR_DEVICE:-auto}")" in
+      cuda|gpu|cuda:*)
+        if ! python3 <<'PY'
+import sys
+
+import onnxruntime
+
+providers = set(onnxruntime.get_available_providers())
+sys.exit(0 if "CUDAExecutionProvider" in providers else 1)
+PY
+        then
+          missing_image_dependency "onnxruntime CUDAExecutionProvider"
+        fi
+        ;;
+    esac
     return
   fi
   missing_image_dependency "SenseVoice streaming ASR runtime"
@@ -544,12 +559,14 @@ ensure_cosyvoice_runtime() {
 
 ensure_online_asr_runtime() {
   require_python_module httpx
-  require_command ffmpeg
 }
 
 ensure_online_tts_runtime() {
   require_python_module httpx
-  require_command ffmpeg
+  case "$(normalize_key "${ONLINE_TTS_RESPONSE_FORMAT:-pcm}")" in
+    pcm) ;;
+    *) require_command ffmpeg ;;
+  esac
 }
 
 f5_tts_runtime_ok() {
@@ -910,6 +927,30 @@ f5_tts_model_ok() {
     "$MODELS_DIR/f5-tts/vocos-mel-24khz/pytorch_model.bin"
 }
 
+copy_f5_tts_config() {
+  python3 - "$VOICE_TTS_MODEL" "$TTS_MODEL_DIR/config.yaml" <<'PY'
+import shutil
+import sys
+from pathlib import Path
+
+try:
+    from importlib.resources import files
+except ImportError:
+    from importlib_resources import files
+
+model_name = sys.argv[1]
+target = Path(sys.argv[2])
+source = files("f5_tts").joinpath("configs", f"{model_name}.yaml")
+if not source.is_file():
+    print(f"missing f5_tts config resource: configs/{model_name}.yaml", file=sys.stderr)
+    sys.exit(1)
+
+target.parent.mkdir(parents=True, exist_ok=True)
+with source.open("rb") as input_file, target.open("wb") as output_file:
+    shutil.copyfileobj(input_file, output_file)
+PY
+}
+
 ensure_f5_tts_model() {
   if f5_tts_model_ok; then
     echo "f5-tts $VOICE_TTS_MODEL is ready"
@@ -929,7 +970,7 @@ ensure_f5_tts_model() {
     "$F5_TTS_HF_REPO_ID" \
     "$F5_TTS_HF_REVISION" \
     "$F5_TTS_VOCAB_REMOTE_FILE"
-  cp "/usr/local/lib/python3.8/dist-packages/f5_tts/configs/$VOICE_TTS_MODEL.yaml" "$TTS_MODEL_DIR/config.yaml"
+  copy_f5_tts_config
 
   ensure_hf_snapshot_model \
     "vocos-mel-24khz" \
