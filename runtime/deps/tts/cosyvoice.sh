@@ -17,6 +17,7 @@ pip_install \
   "conformer==0.3.2" \
   "diffusers==0.29.0" \
   "einops==0.8.0" \
+  "huggingface-hub==0.25.2" \
   "hydra-core" \
   "HyperPyYAML==1.2.3" \
   "inflect==7.3.1" \

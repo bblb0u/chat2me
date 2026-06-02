@@ -7,7 +7,7 @@ pip_install \
   "kaldi_native_fbank" \
   "onnx==1.16.1" \
   "onnxruntime==1.16.3" \
-  "sense-voice-streaming-asr==0.1.1" \
+  "https://github.com/nikoseven/sense-voice-streaming-asr/archive/51b503efa0e373828da61f472d75850f95e53660.tar.gz" \
   "sentencepiece"
 
 python3 - <<'PY'
