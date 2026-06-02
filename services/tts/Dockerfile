@@ -3,7 +3,7 @@ FROM ubuntu:20.04
 ARG JETSON_L4T_PLATFORM=t234
 ARG JETSON_TORCH_WHEEL_URL=https://developer.download.nvidia.com/compute/redist/jp/v512/pytorch/torch-2.1.0a0+41361538.nv23.06-cp38-cp38-linux_aarch64.whl
 ARG COSYVOICE_GIT_REF=v2.0
-ARG VOICE_RUNTIME_FEATURES="piper melotts f5-tts cosyvoice online"
+ARG VOICE_RUNTIME_FEATURES="piper melotts f5-tts cosyvoice"
 ARG CHAT2ME_DOWNLOAD_RETRIES=10
 ARG CHAT2ME_GIT_RETRIES=5
 ARG CHAT2ME_PIP_RETRIES=10
@@ -46,7 +46,6 @@ COPY runtime/deps/install.sh /opt/chat2me-deps/install.sh
 COPY runtime/deps/shared /opt/chat2me-deps/shared
 COPY runtime/deps/tts /opt/chat2me-deps/tts
 COPY runtime/deps/platform /opt/chat2me-deps/platform
-COPY runtime/deps/online /opt/chat2me-deps/online
 RUN find /opt/chat2me-deps -type f -name "*.sh" -exec chmod +x {} + \
     && JETSON_L4T_PLATFORM="$JETSON_L4T_PLATFORM" \
        JETSON_TORCH_WHEEL_URL="$JETSON_TORCH_WHEEL_URL" \

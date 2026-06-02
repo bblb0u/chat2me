@@ -343,17 +343,15 @@ PY
 | `runtime/shared/voice.py` | ASR/TTS/Speech 共享语音逻辑：模型创建、远程 ASR/TTS 适配、音频读写、噪声门限、播放、服务探活缓存。 |
 | `runtime/entrypoints/config.sh` | Core 和 Relay 共用入口：首次启动时初始化 `/app/config`。 |
 | `runtime/entrypoints/audio.sh` | ASR/TTS/Speech 镜像入口：初始化配置、解析模型选择、下载/校验 KWS/ASR/TTS 模型。 |
-| `runtime/deps/install.sh` | 根据 feature 列表安装指定语音依赖。 |
+| `runtime/deps/install.sh` | 根据 feature 列表安装指定本地语音运行时依赖。 |
 | `runtime/deps/lib/common.sh` | 下载、pip、apt、git clone 的重试工具函数。 |
 | `runtime/deps/shared/sherpa_onnx.sh` | 安装 ASR、MeloTTS 和唤醒词共用的 Sherpa ONNX runtime。 |
 | `runtime/deps/platform/jetson_gpu.sh` | 配置 Jetson L4T CUDA/TensorRT apt 源并安装 GPU 库。 |
 | `runtime/deps/platform/jetson_torch.sh` | 安装 Jetson PyTorch wheel。 |
 | `runtime/deps/asr/sensevoice.sh` | 安装 SenseVoice streaming ASR 依赖并做兼容补丁。 |
 | `runtime/deps/tts/piper.sh` | 下载并安装 Piper runtime。 |
-| `runtime/deps/tts/melotts.sh` | 复用 Sherpa ONNX runtime 支持 MeloTTS ONNX。 |
 | `runtime/deps/tts/f5.sh` | 安装 F5-TTS 及 Jetson GPU/Torch 依赖。 |
 | `runtime/deps/tts/cosyvoice.sh` | 安装 CosyVoice、Matcha-TTS、Whisper tokenizer 资源及 GPU 依赖。 |
-| `runtime/deps/online/http_audio.sh` | 校验在线音频所需的 httpx 和 ffmpeg。 |
 
 ### firmware/display
 

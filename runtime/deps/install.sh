@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-features="${1:-sensevoice sherpa melotts piper f5-tts online}"
+features="${1:-sensevoice sherpa melotts piper f5-tts}"
 
 for feature in $features; do
   case "$feature" in
@@ -15,16 +15,13 @@ for feature in $features; do
       /opt/chat2me-deps/tts/piper.sh
       ;;
     tts-melotts|melotts)
-      /opt/chat2me-deps/tts/melotts.sh
+      /opt/chat2me-deps/shared/sherpa_onnx.sh
       ;;
     tts-f5|f5|f5-tts)
       /opt/chat2me-deps/tts/f5.sh
       ;;
     tts-cosyvoice|cosyvoice)
       /opt/chat2me-deps/tts/cosyvoice.sh
-      ;;
-    online|online-audio)
-      /opt/chat2me-deps/online/http_audio.sh
       ;;
     none)
       ;;

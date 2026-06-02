@@ -1,6 +1,6 @@
 FROM ubuntu:20.04
 
-ARG VOICE_RUNTIME_FEATURES="sensevoice sherpa online"
+ARG VOICE_RUNTIME_FEATURES="sensevoice sherpa"
 ARG CHAT2ME_DOWNLOAD_RETRIES=10
 ARG CHAT2ME_GIT_RETRIES=5
 ARG CHAT2ME_PIP_RETRIES=10
@@ -42,7 +42,6 @@ RUN python3 -m pip install --no-cache-dir eval_type_backport==0.2.2
 COPY runtime/deps/install.sh /opt/chat2me-deps/install.sh
 COPY runtime/deps/shared /opt/chat2me-deps/shared
 COPY runtime/deps/asr /opt/chat2me-deps/asr
-COPY runtime/deps/online /opt/chat2me-deps/online
 RUN find /opt/chat2me-deps -type f -name "*.sh" -exec chmod +x {} + \
     && /opt/chat2me-deps/install.sh "$VOICE_RUNTIME_FEATURES"
 
