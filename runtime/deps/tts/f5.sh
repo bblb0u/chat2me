@@ -8,6 +8,7 @@ set -eu
 
 apt_install_packages \
   libsndfile1
+rm -rf /var/lib/apt/lists/*
 
 pip_install \
   "einops==0.8.0" \

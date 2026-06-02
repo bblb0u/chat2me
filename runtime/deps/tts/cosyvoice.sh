@@ -11,6 +11,7 @@ COSYVOICE_GIT_REF="${COSYVOICE_GIT_REF:-v2.0}"
 apt_install_packages \
   git \
   libsndfile1
+rm -rf /var/lib/apt/lists/*
 
 pip_install \
   "conformer==0.3.2" \
