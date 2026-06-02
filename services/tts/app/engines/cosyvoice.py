@@ -24,7 +24,7 @@ def install_cosyvoice_runtime_adapters(package_path: str, whisper_assets_dir: Pa
             sys.path.insert(0, path)
 
     if importlib.util.find_spec("torchaudio") is None:
-        from app.f5_tts_runtime import install_torchaudio_shim
+        from app.engines.f5 import install_torchaudio_shim
 
         install_torchaudio_shim()
 
@@ -581,5 +581,4 @@ def install_matcha_inference_adapters(importlib: Any, types: Any) -> None:
     sys.modules["matcha.utils.pylogger"] = pylogger
     sys.modules["matcha.utils.model"] = model
     sys.modules["matcha.utils.audio"] = audio
-
 

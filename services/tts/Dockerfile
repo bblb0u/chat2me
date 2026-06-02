@@ -59,9 +59,8 @@ COPY config /defaults/config
 COPY runtime/audio-entrypoint.sh /entrypoint.sh
 COPY runtime/app/runtime.py ./app/runtime.py
 COPY runtime/app/agent.py ./app/agent.py
-COPY services/tts/app/cosyvoice_runtime.py ./app/cosyvoice_runtime.py
-COPY services/tts/app/f5_tts_runtime.py ./app/f5_tts_runtime.py
-COPY services/tts/app/tts.py ./app/tts.py
+COPY services/tts/app/engines ./app/engines
+COPY services/tts/app/main.py ./app/main.py
 RUN chmod +x /entrypoint.sh
 
 ENV COSYVOICE_CODE_DIR=/opt/CosyVoice \
@@ -72,4 +71,4 @@ ENV COSYVOICE_CODE_DIR=/opt/CosyVoice \
     PATH=/usr/src/tensorrt/bin:$PATH
 
 ENTRYPOINT ["/entrypoint.sh"]
-CMD ["python3", "-m", "app.tts"]
+CMD ["python3", "-m", "app.main"]

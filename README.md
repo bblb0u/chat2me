@@ -307,7 +307,7 @@ PY
 | --- | --- |
 | `services/asr/Dockerfile` | 构建 ASR 镜像，默认 `VOICE_ROLE=chat2me-asr`，只安装 ASR 服务、在线转写和 WAV 上传接口所需依赖。 |
 | `services/asr/requirements.txt` | ASR 服务基础 Python 依赖。 |
-| `services/asr/app/asr.py` | ASR FastAPI 服务：WAV 上传、在线/本地识别、fallback、reachability。 |
+| `services/asr/app/main.py` | ASR FastAPI 服务入口：WAV 上传、在线/本地识别、fallback、reachability。 |
 
 ### services/tts
 
@@ -315,9 +315,9 @@ PY
 | --- | --- |
 | `services/tts/Dockerfile` | 构建 TTS 镜像，默认 `VOICE_ROLE=chat2me-tts`，只安装 TTS 服务、在线合成和本地 TTS 引擎所需依赖。 |
 | `services/tts/requirements.txt` | TTS 服务基础 Python 依赖。 |
-| `services/tts/app/tts.py` | TTS FastAPI 服务：文本合成 WAV、在线/本地合成、fallback、reachability。 |
-| `services/tts/app/f5_tts_runtime.py` | F5-TTS 模型加载和推理适配。 |
-| `services/tts/app/cosyvoice_runtime.py` | CosyVoice 运行时兼容补丁和依赖路径适配。 |
+| `services/tts/app/main.py` | TTS FastAPI 服务入口：文本合成 WAV、在线/本地合成、fallback、reachability。 |
+| `services/tts/app/engines/f5.py` | F5-TTS 模型加载和推理适配。 |
+| `services/tts/app/engines/cosyvoice.py` | CosyVoice 运行兼容补丁和依赖路径适配。 |
 
 ### services/speech
 
@@ -325,7 +325,7 @@ PY
 | --- | --- |
 | `services/speech/Dockerfile` | 构建 Speech 镜像，默认 `VOICE_ROLE=chat2me-speech`，只安装唤醒、麦克风输入、扬声器播放、ReSpeaker 和远程调用所需依赖。 |
 | `services/speech/requirements.txt` | Speech 服务基础 Python 依赖。 |
-| `services/speech/app/speech.py` | 语音主服务：唤醒监听、会话循环、HTTP `/wake`、状态接口和远程 ASR/TTS 调用。 |
+| `services/speech/app/main.py` | Speech 服务入口：唤醒监听、会话循环、HTTP `/wake`、状态接口和远程 ASR/TTS 调用。 |
 | `services/speech/app/respeaker.py` | ReSpeaker USB 参数读写、降噪/AGC/AEC tuning、DOA 角度和方向话术。 |
 
 ### services/relay
@@ -333,7 +333,7 @@ PY
 | 文件 | 作用 |
 | --- | --- |
 | `services/relay/Dockerfile` | 构建 Relay 镜像，默认 `VOICE_ROLE=chat2me-relay`，只安装状态轮询和串口转发所需依赖。 |
-| `services/relay/app/relay.py` | 状态转发服务：主动读取 `chat2me-speech /state`，状态变化时写入屏幕串口，后续可扩展信号灯等输出。 |
+| `services/relay/app/main.py` | Relay 服务入口：主动读取 `chat2me-speech /state`，状态变化时写入屏幕串口，后续可扩展信号灯等输出。 |
 
 ### runtime
 

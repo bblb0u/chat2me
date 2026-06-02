@@ -1129,7 +1129,7 @@ def create_cosyvoice_tts() -> TextToSpeech:
     import inspect
     import torch
 
-    from app.cosyvoice_runtime import install_cosyvoice_runtime_adapters
+    from app.engines.cosyvoice import install_cosyvoice_runtime_adapters
 
     install_cosyvoice_runtime_adapters(
         COSYVOICE_PACKAGE_PATH,
@@ -1208,7 +1208,7 @@ class SherpaTTSWithSpeaker(SherpaTTS):
 
 
 def create_f5_tts() -> TextToSpeech:
-    from app.f5_tts_runtime import F5TTSRuntime
+    from app.engines.f5 import F5TTSRuntime
 
     runtime = F5TTSRuntime(
         model_name=VOICE_TTS_MODEL,

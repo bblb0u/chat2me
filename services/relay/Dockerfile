@@ -16,8 +16,8 @@ RUN pip install --no-cache-dir httpx==0.28.1 pyserial==3.5
 COPY config /defaults/config
 COPY runtime/config-entrypoint.sh /entrypoint.sh
 COPY runtime/app/runtime.py ./app/runtime.py
-COPY services/relay/app/relay.py ./app/relay.py
+COPY services/relay/app/main.py ./app/main.py
 RUN chmod +x /entrypoint.sh
 
 ENTRYPOINT ["/entrypoint.sh"]
-CMD ["python3", "-m", "app.relay"]
+CMD ["python3", "-m", "app.main"]

@@ -50,10 +50,10 @@ COPY runtime/audio-entrypoint.sh /entrypoint.sh
 COPY runtime/app/runtime.py ./app/runtime.py
 COPY runtime/app/agent.py ./app/agent.py
 COPY services/speech/app/respeaker.py ./app/respeaker.py
-COPY services/speech/app/speech.py ./app/speech.py
+COPY services/speech/app/main.py ./app/main.py
 RUN chmod +x /entrypoint.sh
 
 ENV LD_LIBRARY_PATH=/usr/local/cuda-11.4/targets/aarch64-linux/lib:/usr/local/cuda/lib64:/usr/lib/aarch64-linux-gnu:/usr/lib/aarch64-linux-gnu/tegra
 
 ENTRYPOINT ["/entrypoint.sh"]
-CMD ["python3", "-m", "app.speech"]
+CMD ["python3", "-m", "app.main"]
