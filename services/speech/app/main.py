@@ -1,33 +1,47 @@
 from __future__ import annotations
 
+import base64
+import binascii
+import io
 import json
 import os
 import sys
 import threading
 import time
+import wave
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse
 
+import httpx
 import sounddevice as sd
 
 from app.voice import (
+    ASR_ROUTE_CACHE,
+    ASR_ROUTE_CACHE_LOCK,
+    ASR_SERVICE_URL,
     CHUNK_SECONDS,
+    CORE_URL,
     DISPLAY_SERIAL_BAUD,
     DISPLAY_TEXT_MAX_CHARS,
-    CORE_URL,
     INPUT_CHANNELS,
     INPUT_DEVICE,
     INPUT_DEVICE_REQUIRED,
     KWS_MODEL_DIR,
+    LLM_ROUTE_CACHE,
+    LLM_ROUTE_CACHE_LOCK,
     MAX_SESSION_TURNS,
     POST_RESPONSE_DRAIN_SECONDS,
     SAMPLE_RATE,
     SESSION_END_RESPONSE,
     SESSION_IDLE_RESPONSE,
+    TTS_ROUTE_CACHE,
+    TTS_ROUTE_CACHE_LOCK,
+    TTS_SERVICE_URL,
     WAKE_RESPONSE,
     DisplayClient,
+    cached_online_available,
     create_kws,
     create_remote_asr,
     create_remote_tts,
@@ -39,6 +53,7 @@ from app.voice import (
     log,
     read_mono,
     select_input_device,
+    spoken_text,
     speak_pausing_input,
     start_asr_route_cache,
     start_llm_route_cache,
@@ -54,6 +69,9 @@ SPEECH_PORT = int(os.getenv("SPEECH_PORT", "8090"))
 DIRECTION_CHANGE_POLL_SECONDS = float(os.getenv("DIRECTION_CHANGE_POLL_SECONDS", "0.5").strip() or "0.5")
 SPEECH_WAIT_LOG_SECONDS = env_float("SPEECH_WAIT_LOG_SECONDS")
 SPEECH_WAIT_POLL_SECONDS = env_float("SPEECH_WAIT_POLL_SECONDS")
+SPEECH_DIAGNOSTIC_MAX_BODY_BYTES = int(os.getenv("SPEECH_DIAGNOSTIC_MAX_BODY_BYTES", "25165824").strip() or "25165824")
+SPEECH_DIAGNOSTIC_MAX_AUDIO_BYTES = int(os.getenv("SPEECH_DIAGNOSTIC_MAX_AUDIO_BYTES", "16777216").strip() or "16777216")
+SPEECH_DIAGNOSTIC_TIMEOUT_SECONDS = float(os.getenv("SPEECH_DIAGNOSTIC_TIMEOUT_SECONDS", "180").strip() or "180")
 
 
 STATE_LOCK = threading.Lock()
@@ -118,7 +136,12 @@ class WakeHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_POST(self) -> None:
-        if self.path != "/wake":
+        path = urlparse(self.path).path
+        if path == "/diagnostics/turn":
+            self._handle_diagnostic_turn()
+            return
+
+        if path != "/wake":
             self.send_response(404)
             self.end_headers()
             return
@@ -141,6 +164,207 @@ class WakeHandler(BaseHTTPRequestHandler):
         ).start()
         self.send_response(202)
         self.end_headers()
+
+    def _read_json_body(self) -> dict[str, object]:
+        raw_length = self.headers.get("Content-Length")
+        if not raw_length:
+            return {}
+        try:
+            length = int(raw_length)
+        except ValueError as exc:
+            raise ValueError("invalid Content-Length") from exc
+        if length > SPEECH_DIAGNOSTIC_MAX_BODY_BYTES:
+            raise ValueError("diagnostic request body is too large")
+        body = self.rfile.read(length)
+        try:
+            payload = json.loads(body.decode("utf-8"))
+        except ValueError as exc:
+            raise ValueError("diagnostic request body must be JSON") from exc
+        if not isinstance(payload, dict):
+            raise ValueError("diagnostic request body must be a JSON object")
+        return payload
+
+    def _handle_diagnostic_turn(self) -> None:
+        try:
+            payload = self._read_json_body()
+            result = run_diagnostic_turn(payload)
+            self._send_json(result)
+        except ValueError as exc:
+            self._send_json({"ok": False, "error": str(exc)}, HTTPStatus.BAD_REQUEST)
+        except httpx.HTTPStatusError as exc:
+            self._send_json(
+                {
+                    "ok": False,
+                    "error": "upstream_http_error",
+                    "status_code": exc.response.status_code,
+                    "body": exc.response.text[:800],
+                },
+                HTTPStatus.BAD_GATEWAY,
+            )
+        except Exception as exc:
+            log(f"diagnostic turn failed: {exc}")
+            self._send_json({"ok": False, "error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
+
+
+def route_cache_online(cache: dict[str, object], lock: threading.Lock) -> bool:
+    return cached_online_available(cache, lock)
+
+
+def decode_audio_wav_base64(value: object) -> bytes:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError("audio_wav_base64 must be a non-empty base64 string")
+    encoded = value.strip()
+    if encoded.startswith("data:") and "," in encoded:
+        encoded = encoded.split(",", 1)[1]
+    try:
+        audio = base64.b64decode(encoded, validate=True)
+    except binascii.Error as exc:
+        raise ValueError("audio_wav_base64 is not valid base64") from exc
+    if len(audio) > SPEECH_DIAGNOSTIC_MAX_AUDIO_BYTES:
+        raise ValueError("diagnostic audio is too large")
+    return audio
+
+
+def wav_metadata(wav_bytes: bytes) -> dict[str, object]:
+    try:
+        with wave.open(io.BytesIO(wav_bytes), "rb") as wav:
+            channels = wav.getnchannels()
+            sample_width = wav.getsampwidth()
+            sample_rate = wav.getframerate()
+            frames = wav.getnframes()
+    except wave.Error as exc:
+        raise ValueError("audio_wav_base64 must contain a valid WAV file") from exc
+    duration = frames / sample_rate if sample_rate else 0.0
+    return {
+        "channels": channels,
+        "sample_width_bytes": sample_width,
+        "sample_rate": sample_rate,
+        "frames": frames,
+        "duration_seconds": round(duration, 3),
+    }
+
+
+def timed_post_asr(client: httpx.Client, wav_bytes: bytes) -> dict[str, object]:
+    started = time.perf_counter()
+    response = client.post(
+        ASR_SERVICE_URL,
+        data={"online_available": "1" if route_cache_online(ASR_ROUTE_CACHE, ASR_ROUTE_CACHE_LOCK) else "0"},
+        files={"file": ("diagnostic.wav", wav_bytes, "audio/wav")},
+    )
+    wall_ms = int((time.perf_counter() - started) * 1000)
+    response.raise_for_status()
+    body = response.json()
+    return {
+        "ok": True,
+        "wall_ms": wall_ms,
+        "body": body,
+        "text": str(body.get("text") or "").strip() if isinstance(body, dict) else "",
+    }
+
+
+def timed_post_core(client: httpx.Client, text: str, system_prompt: object) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "message": text,
+        "online_available": route_cache_online(LLM_ROUTE_CACHE, LLM_ROUTE_CACHE_LOCK),
+    }
+    if isinstance(system_prompt, str) and system_prompt.strip():
+        payload["system_prompt"] = system_prompt.strip()
+    started = time.perf_counter()
+    response = client.post(CORE_URL, json=payload)
+    wall_ms = int((time.perf_counter() - started) * 1000)
+    response.raise_for_status()
+    body = response.json()
+    return {
+        "ok": True,
+        "wall_ms": wall_ms,
+        "body": body,
+        "answer": str(body.get("answer") or "").strip() if isinstance(body, dict) else "",
+    }
+
+
+def timed_post_tts(client: httpx.Client, text: str, return_audio_base64: bool) -> dict[str, object]:
+    started = time.perf_counter()
+    first_audio_chunk_ms: int | None = None
+    audio = bytearray()
+    with client.stream(
+        "POST",
+        TTS_SERVICE_URL,
+        json={
+            "text": text,
+            "online_available": route_cache_online(TTS_ROUTE_CACHE, TTS_ROUTE_CACHE_LOCK),
+        },
+    ) as response:
+        headers = {
+            "route": response.headers.get("x-chat2me-tts-route"),
+            "engine": response.headers.get("x-chat2me-tts-engine"),
+            "model": response.headers.get("x-chat2me-tts-model"),
+            "content_type": response.headers.get("content-type"),
+        }
+        response.raise_for_status()
+        for chunk in response.iter_bytes():
+            if chunk and first_audio_chunk_ms is None:
+                first_audio_chunk_ms = int((time.perf_counter() - started) * 1000)
+            audio.extend(chunk)
+    payload: dict[str, object] = {
+        "ok": True,
+        "wall_ms": int((time.perf_counter() - started) * 1000),
+        "time_to_first_audio_chunk_ms": first_audio_chunk_ms,
+        "bytes": len(audio),
+        "headers": headers,
+    }
+    if return_audio_base64:
+        payload["audio_wav_base64"] = base64.b64encode(bytes(audio)).decode("ascii")
+    return payload
+
+
+def run_diagnostic_turn(payload: dict[str, object]) -> dict[str, object]:
+    started = time.perf_counter()
+    input_text = str(payload.get("text") or "").strip()
+    audio_base64 = payload.get("audio_wav_base64")
+    return_audio_base64 = bool(payload.get("return_audio_base64"))
+    system_prompt = payload.get("system_prompt")
+    result: dict[str, object] = {
+        "ok": True,
+        "input": {},
+        "asr": {"skipped": True},
+    }
+
+    timeout = httpx.Timeout(connect=5.0, read=SPEECH_DIAGNOSTIC_TIMEOUT_SECONDS, write=15.0, pool=5.0)
+    with httpx.Client(timeout=timeout) as client:
+        if audio_base64 is not None:
+            wav_bytes = decode_audio_wav_base64(audio_base64)
+            result["input"] = {"audio": wav_metadata(wav_bytes)}
+            asr_result = timed_post_asr(client, wav_bytes)
+            result["asr"] = asr_result
+            input_text = asr_result["text"] or input_text
+        else:
+            result["input"] = {"text_chars": len(input_text)}
+
+        if not input_text:
+            raise ValueError("diagnostic turn requires text or audio that transcribes to text")
+
+        core_result = timed_post_core(client, input_text, system_prompt)
+        result["core"] = core_result
+        answer = core_result["answer"]
+        tts_input = spoken_text(answer) or answer
+        if not tts_input:
+            raise ValueError("core returned an empty answer")
+        result["tts_input"] = {
+            "text": tts_input,
+            "text_chars": len(tts_input),
+            "shortened": tts_input != answer,
+        }
+        result["tts"] = timed_post_tts(client, tts_input, return_audio_base64)
+
+    result["total_latency_ms"] = int((time.perf_counter() - started) * 1000)
+    log(
+        "diagnostic turn completed: "
+        f"asr_ms={dict(result.get('asr') or {}).get('wall_ms')} "
+        f"core_ms={dict(result.get('core') or {}).get('wall_ms')} "
+        f"tts_ms={dict(result.get('tts') or {}).get('wall_ms')} "
+        f"total_ms={result['total_latency_ms']}"
+    )
+    return result
 
 
 def direction_snapshot(audio_source) -> dict[str, object]:

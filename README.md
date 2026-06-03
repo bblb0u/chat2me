@@ -263,6 +263,7 @@ ESP32 显示固件通过 USB Serial/JTAG 从标准输入读取一行 JSON：
 - `GET /health`
 - `GET /state`
 - `POST /wake`
+- `POST /diagnostics/turn`：内部诊断回合，可提交 `audio_wav_base64` 或 `text`，返回 ASR、core/LLM、TTS 的路由和耗时；用于无麦克风时验证远端镜像链路。
 
 `chat2me-relay`：
 
@@ -349,7 +350,7 @@ PY
 | --- | --- |
 | `services/speech/Dockerfile` | 构建 Speech 镜像，默认 `VOICE_ROLE=chat2me-speech`，只安装唤醒、麦克风输入、扬声器播放、ReSpeaker 和远程调用所需依赖。 |
 | `services/speech/requirements.txt` | Speech 服务基础 Python 依赖。 |
-| `services/speech/app/main.py` | Speech 服务入口：唤醒监听、会话循环、HTTP `/wake`、状态接口和远程 ASR/TTS 调用。 |
+| `services/speech/app/main.py` | Speech 服务入口：唤醒监听、会话循环、HTTP `/wake`、状态接口、诊断回合和远程 ASR/TTS 调用。 |
 | `services/speech/app/respeaker.py` | ReSpeaker USB 参数读写、降噪/AGC/AEC tuning、DOA 角度和方向话术。 |
 
 ### services/relay
