@@ -26,6 +26,109 @@ lock_key() {
   printf '%s' "$MODEL_SET" | tr -c 'A-Za-z0-9_.-' '-'
 }
 
+now_seconds() {
+  date +%s
+}
+
+path_mtime_seconds() {
+  stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null || echo 0
+}
+
+process_start_time() {
+  if [ -r "/proc/$1/stat" ]; then
+    awk '{print $22}' "/proc/$1/stat" 2>/dev/null || true
+  fi
+}
+
+model_lock_value() {
+  if [ -f "$LOCK_DIR/$1" ]; then
+    sed -n '1p' "$LOCK_DIR/$1" 2>/dev/null || true
+  fi
+}
+
+model_lock_is_stale() {
+  lock_stale_reason=""
+  [ -d "$LOCK_DIR" ] || return 1
+
+  now="$(now_seconds)"
+  heartbeat="$LOCK_DIR/heartbeat"
+  if [ -f "$heartbeat" ]; then
+    heartbeat_mtime="$(path_mtime_seconds "$heartbeat")"
+    heartbeat_age=$((now - heartbeat_mtime))
+    if [ "$heartbeat_age" -le "$LOCK_STALE_SECONDS" ]; then
+      return 1
+    fi
+    lock_stale_reason="heartbeat stale for ${heartbeat_age}s"
+    return 0
+  fi
+
+  lock_pid="$(model_lock_value pid)"
+  lock_start_time="$(model_lock_value start_time)"
+  if [ -n "$lock_pid" ] && [ -n "$lock_start_time" ]; then
+    current_start_time="$(process_start_time "$lock_pid")"
+    if [ "$current_start_time" = "$lock_start_time" ]; then
+      return 1
+    fi
+    lock_stale_reason="owner pid is not running"
+    return 0
+  fi
+
+  lock_mtime="$(path_mtime_seconds "$LOCK_DIR")"
+  lock_age=$((now - lock_mtime))
+  if [ "$lock_age" -ge "$LOCK_STALE_SECONDS" ]; then
+    lock_stale_reason="legacy lock is ${lock_age}s old"
+    return 0
+  fi
+  return 1
+}
+
+write_model_lock_metadata() {
+  hostname_value="$(hostname 2>/dev/null || echo unknown)"
+  {
+    echo "$LOCK_OWNER" > "$LOCK_DIR/owner"
+    echo "$$" > "$LOCK_DIR/pid"
+    process_start_time "$$" > "$LOCK_DIR/start_time"
+    echo "$hostname_value" > "$LOCK_DIR/hostname"
+    now_seconds > "$LOCK_DIR/created_at"
+    echo "$MODEL_SET" > "$LOCK_DIR/model_set"
+  }
+}
+
+start_model_lock_heartbeat() {
+  touch "$LOCK_DIR/heartbeat"
+  (
+    while :; do
+      touch "$LOCK_DIR/heartbeat" 2>/dev/null || exit 0
+      sleep "$LOCK_HEARTBEAT_SECONDS"
+    done
+  ) &
+  LOCK_HEARTBEAT_PID="$!"
+}
+
+cleanup_model_lock() {
+  if [ -n "${LOCK_HEARTBEAT_PID:-}" ]; then
+    heartbeat_pid="$LOCK_HEARTBEAT_PID"
+    LOCK_HEARTBEAT_PID=""
+    kill "$heartbeat_pid" 2>/dev/null || true
+    wait "$heartbeat_pid" 2>/dev/null || true
+  fi
+
+  if [ -n "${LOCK_DIR:-}" ] && [ -d "$LOCK_DIR" ]; then
+    owner_on_disk="$(model_lock_value owner)"
+    if [ "$owner_on_disk" = "${LOCK_OWNER:-}" ] || [ -z "$owner_on_disk" ]; then
+      rm -f \
+        "$LOCK_DIR/owner" \
+        "$LOCK_DIR/pid" \
+        "$LOCK_DIR/start_time" \
+        "$LOCK_DIR/hostname" \
+        "$LOCK_DIR/created_at" \
+        "$LOCK_DIR/model_set" \
+        "$LOCK_DIR/heartbeat"
+      rmdir "$LOCK_DIR" 2>/dev/null || true
+    fi
+  fi
+}
+
 normalize_key() {
   printf '%s' "$1" | tr '[:upper:]' '[:lower:]'
 }
@@ -1201,6 +1304,8 @@ if model_selected speech || model_selected tts-service; then
   fi
 fi
 : "${LOCK_WAIT_LOG_SECONDS:?LOCK_WAIT_LOG_SECONDS must be set in runtime.env}"
+LOCK_STALE_SECONDS="${LOCK_STALE_SECONDS:-600}"
+LOCK_HEARTBEAT_SECONDS="${LOCK_HEARTBEAT_SECONDS:-5}"
 
 if [ "$VOICE_MODELS_REQUIRED" != "1" ]; then
   exec "$@"
@@ -1208,6 +1313,8 @@ fi
 
 mkdir -p "$MODELS_DIR"
 LOCK_DIR="$MODELS_DIR/.download.$(lock_key).lock"
+LOCK_OWNER="$(hostname 2>/dev/null || echo unknown)-$$-$(now_seconds)"
+LOCK_HEARTBEAT_PID=""
 lock_waited=0
 while ! mkdir "$LOCK_DIR" 2>/dev/null; do
   sleep 2
@@ -1217,14 +1324,27 @@ while ! mkdir "$LOCK_DIR" 2>/dev/null; do
   elif [ "$LOCK_WAIT_LOG_SECONDS" -gt 0 ] && [ $((lock_waited % LOCK_WAIT_LOG_SECONDS)) -eq 0 ]; then
     echo "[models] still waiting for voice model download lock: $MODEL_SET (${lock_waited}s)"
   fi
-  if [ "$lock_waited" -ge 600 ]; then
-    echo "[models] removing stale voice model download lock after ${lock_waited}s: $LOCK_DIR" >&2
-    rmdir "$LOCK_DIR" 2>/dev/null || true
+  if model_lock_is_stale; then
+    stale_owner="$(model_lock_value owner)"
+    echo "[models] removing stale voice model download lock: $LOCK_DIR (${lock_stale_reason:-unknown})" >&2
+    if [ -n "$stale_owner" ]; then
+      current_owner="$(model_lock_value owner)"
+      if [ "$current_owner" = "$stale_owner" ]; then
+        rm -rf "$LOCK_DIR"
+      fi
+    else
+      rm -rf "$LOCK_DIR"
+    fi
     lock_waited=0
   fi
 done
 echo "[models] voice model download lock acquired: $MODEL_SET"
-trap 'rmdir "$LOCK_DIR"' EXIT
+trap 'cleanup_model_lock' EXIT
+trap 'cleanup_model_lock; exit 129' HUP
+trap 'cleanup_model_lock; exit 130' INT
+trap 'cleanup_model_lock; exit 143' TERM
+write_model_lock_metadata
+start_model_lock_heartbeat
 
 ensure_selected_runtimes
 
@@ -1292,8 +1412,8 @@ if model_selected cosyvoice; then
   ensure_cosyvoice_model
 fi
 
-trap - EXIT
-rmdir "$LOCK_DIR"
+trap - EXIT HUP INT TERM
+cleanup_model_lock
 
 restore_runtime_model_selection
 exec "$@"
