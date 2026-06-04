@@ -154,14 +154,11 @@ VOICE_TTS_DEVICE=auto
 VOICE_KWS_PROVIDER=auto
 MELOTTS_LANGUAGE=ZH
 MELOTTS_SPEAKER=ZH
+MELOTTS_DISABLE_BERT=1
 SHERPA_TTS_PROVIDER=auto
-ASR_WARMUP_SECONDS=3
-ASR_WARMUP_WAV_PATH=/app/assets/asr_warmup_16k.wav
 ```
 
 GPU 相关默认值使用 `auto`：运行时先尝试 CUDA/GPU，当前镜像或宿主机不可用时才回落 CPU。显式配置 `cuda` 或 `gpu` 时不会回落，CUDA 不可用会直接启动失败；需要禁止 CPU 回落时就使用显式配置。Sherpa ONNX 的 KWS/ASR/TTS provider 使用 `auto/cpu/cuda/gpu`；MeloTTS 使用 PyTorch device，支持 `auto/cpu/cuda/gpu/cuda:<index>`。
-
-ASR GPU 首次真实语音请求可能触发 CUDA 冷启动。`chat2me-asr` 镜像内置了 `/app/assets/asr_warmup_16k.wav`，默认会在启动阶段先跑一次完整 ASR，把这段耗时放到服务 ready 之前；也可以把 `ASR_WARMUP_WAV_PATH` 指向容器内可读的自定义 16-bit PCM WAV。设置 `ASR_WARMUP_SECONDS=0` 可关闭 warmup。
 
 在线 TTS，失败回落本地：
 

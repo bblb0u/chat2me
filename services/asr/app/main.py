@@ -100,7 +100,6 @@ def transcribe_with_recognizer(recognizer: voice.StreamingRecognizer, samples: n
 async def startup() -> None:
     global LOCAL_RECOGNIZER
     LOCAL_RECOGNIZER = create_local_recognizer()
-    voice.warmup_asr(LOCAL_RECOGNIZER)
 
 
 async def shutdown() -> None:

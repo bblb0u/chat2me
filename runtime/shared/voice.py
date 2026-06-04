@@ -28,14 +28,6 @@ def env_float_compat(primary_key: str, fallback_key: str, default: str) -> float
         raise RuntimeError(f"{primary_key} must be a number in runtime.env") from None
 
 
-def env_float_default(key: str, default: str) -> float:
-    value = os.getenv(key, default).strip() or default
-    try:
-        return float(value)
-    except ValueError:
-        raise RuntimeError(f"{key} must be a number in runtime.env") from None
-
-
 MODELS_DIR = Path(os.getenv("MODELS_DIR", "/models"))
 VOICE_KWS_MODEL = "sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20"
 VOICE_ASR_ENGINE = env_value("VOICE_ASR_ENGINE")
@@ -109,9 +101,6 @@ ASR_NOISE_GATE_PERCENTILE = env_float("ASR_NOISE_GATE_PERCENTILE")
 ASR_NOISE_GATE_RATIO = env_float("ASR_NOISE_GATE_RATIO")
 ASR_NOISE_GATE_OFFSET = env_float("ASR_NOISE_GATE_OFFSET")
 ASR_PREROLL_SECONDS = env_float("ASR_PREROLL_SECONDS")
-ASR_WARMUP_SECONDS = env_float_default("ASR_WARMUP_SECONDS", "0")
-ASR_WARMUP_WAV_PATH_RAW = os.getenv("ASR_WARMUP_WAV_PATH", "").strip()
-ASR_WARMUP_WAV_PATH = Path(ASR_WARMUP_WAV_PATH_RAW) if ASR_WARMUP_WAV_PATH_RAW else None
 SHERPA_TTS_THREADS = env_int("SHERPA_TTS_THREADS")
 SHERPA_TTS_PROVIDER = os.getenv("SHERPA_TTS_PROVIDER", "auto").strip().lower() or "auto"
 SHERPA_TTS_SPEED = env_float("SHERPA_TTS_SPEED")
@@ -129,6 +118,7 @@ MELOTTS_SPEED = env_float("MELOTTS_SPEED")
 MELOTTS_SDP_RATIO = env_float("MELOTTS_SDP_RATIO")
 MELOTTS_NOISE_SCALE = env_float("MELOTTS_NOISE_SCALE")
 MELOTTS_NOISE_SCALE_W = env_float("MELOTTS_NOISE_SCALE_W")
+MELOTTS_DISABLE_BERT = env_bool("MELOTTS_DISABLE_BERT")
 TTS_PLAYER_TIMEOUT_SECONDS = env_float("TTS_PLAYER_TIMEOUT_SECONDS")
 SPEECH_TTS_MAX_CHARS = env_int("SPEECH_TTS_MAX_CHARS")
 TTS_CACHE_ENABLED = env_bool("TTS_CACHE_ENABLED")
@@ -590,83 +580,6 @@ def create_remote_asr() -> StreamingRecognizer:
     return RemoteBatchRecognizer()
 
 
-def read_wav_file(path: Path) -> tuple[np.ndarray, int]:
-    with wave.open(str(path), "rb") as wav:
-        channels = wav.getnchannels()
-        sample_width = wav.getsampwidth()
-        sample_rate = wav.getframerate()
-        frames = wav.readframes(wav.getnframes())
-    if sample_width != 2:
-        raise RuntimeError(f"ASR warmup WAV must be 16-bit PCM: {path}")
-    data = np.frombuffer(frames, dtype=np.int16).astype(np.float32) / 32767.0
-    if channels > 1:
-        data = data.reshape(-1, channels).mean(axis=1)
-    return data.astype(np.float32, copy=False), int(sample_rate)
-
-
-def warmup_audio_asr(recognizer: StreamingRecognizer, samples: np.ndarray, sample_rate: int) -> tuple[str, float]:
-    stream = recognizer.create_stream()
-    started = time.monotonic()
-    try:
-        chunk = max(1, int(sample_rate * CHUNK_SECONDS))
-        for offset in range(0, len(samples), chunk):
-            recognizer.accept_waveform(stream, sample_rate, samples[offset : offset + chunk])
-        recognizer.input_finished(stream)
-        text = recognizer.decode_ready(stream)
-    finally:
-        del stream
-    return text, time.monotonic() - started
-
-
-def warmup_streaming_asr(recognizer: StreamingRecognizer, seconds: float) -> tuple[int, float]:
-    samples = np.zeros(max(1, int(SAMPLE_RATE * seconds)), dtype=np.float32)
-    _, elapsed = warmup_audio_asr(recognizer, samples, SAMPLE_RATE)
-    return len(samples), elapsed
-
-
-def run_warmup_wav_asr(recognizer: StreamingRecognizer, path: Path, source: str) -> None:
-    samples, sample_rate = read_wav_file(path)
-    text, elapsed = warmup_audio_asr(recognizer, samples, sample_rate)
-    log(
-        "asr warmup: "
-        f"engine={VOICE_ASR_ENGINE} wav={path} source={source} "
-        f"audio_seconds={len(samples) / max(1, sample_rate):.2f} "
-        f"text_chars={len(text)} elapsed={elapsed:.2f}s"
-    )
-
-
-def warmup_asr(recognizer: StreamingRecognizer) -> None:
-    seconds = ASR_WARMUP_SECONDS
-    if seconds <= 0:
-        return
-
-    started = time.monotonic()
-    try:
-        if ASR_WARMUP_WAV_PATH is not None:
-            if ASR_WARMUP_WAV_PATH.is_file():
-                run_warmup_wav_asr(recognizer, ASR_WARMUP_WAV_PATH, "configured")
-                return
-            log(f"asr warmup skipped: missing wav={ASR_WARMUP_WAV_PATH}")
-            return
-
-        if isinstance(recognizer, RemoteBatchRecognizer):
-            log(f"asr warmup skipped: engine={VOICE_ASR_ENGINE}")
-            return
-
-        samples, elapsed = warmup_streaming_asr(recognizer, seconds)
-        log(
-            "asr warmup: "
-            f"engine={VOICE_ASR_ENGINE} seconds={seconds:.2f} samples={samples} "
-            f"elapsed={elapsed:.2f}s"
-        )
-    except Exception as exc:
-        log(
-            "asr warmup failed: "
-            f"engine={VOICE_ASR_ENGINE} model={VOICE_ASR_MODEL} "
-            f"elapsed={time.monotonic() - started:.2f}s error={exc}"
-        )
-
-
 def write_beep(path: Path) -> None:
     sample_rate = 16000
     duration = 0.13
@@ -706,6 +619,11 @@ class MeloTextToSpeech:
         self.config = SimpleNamespace(sample_rate=sample_rate)
 
     def synthesize_pcm(self, text: str) -> Iterable[bytes]:
+        if MELOTTS_LANGUAGE == "ZH":
+            text = re.sub(r"[A-Za-z_][A-Za-z0-9_.+-]*", "", text)
+            text = re.sub(r"\s+", "", text).strip()
+            if not text or not re.search(r"[\u4e00-\u9fff0-9]", text):
+                return
         audio = self.model.tts_to_file(
             text,
             self.speaker_id,
@@ -911,6 +829,9 @@ def create_melotts_tts() -> TextToSpeech:
         config_path=str(MELOTTS_CONFIG_FILE),
         ckpt_path=str(MELOTTS_CKPT_FILE),
     )
+    if MELOTTS_DISABLE_BERT:
+        setattr(model.hps.data, "disable_bert", True)
+        log("MeloTTS BERT features disabled")
     speaker_id = resolve_melotts_speaker(model)
     sample_rate = int(getattr(model.hps.data, "sampling_rate", 44100) or 44100)
     log(
