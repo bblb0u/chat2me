@@ -22,7 +22,7 @@ from app.common import env_float, log
 TTS_HOST = os.getenv("TTS_HOST", "0.0.0.0")
 TTS_PORT = int(os.getenv("TTS_PORT", "8093"))
 VOICE_TTS_FALLBACK_ENGINE = os.getenv("VOICE_TTS_FALLBACK_ENGINE", "melotts").strip().lower() or "melotts"
-VOICE_TTS_FALLBACK_MODEL = os.getenv("VOICE_TTS_FALLBACK_MODEL", "vits-melo-tts-zh_en").strip() or "vits-melo-tts-zh_en"
+VOICE_TTS_FALLBACK_MODEL = os.getenv("VOICE_TTS_FALLBACK_MODEL", "MeloTTS-Chinese").strip() or "MeloTTS-Chinese"
 CONFIGURED_TTS_ENGINE = voice.VOICE_TTS_ENGINE
 CONFIGURED_TTS_MODEL = voice.VOICE_TTS_MODEL
 TTS_REACHABILITY_INTERVAL_SECONDS = env_float("TTS_REACHABILITY_INTERVAL_SECONDS")
@@ -85,12 +85,8 @@ def with_tts_env(engine: str, model: str) -> None:
     voice.VOICE_TTS_ENGINE = engine
     voice.VOICE_TTS_MODEL = model
     voice.TTS_MODEL_DIR = voice.MODELS_DIR / engine / model
-    voice.PIPER_MODEL = voice.TTS_MODEL_DIR / "model.onnx"
-    voice.PIPER_CONFIG = Path(str(voice.PIPER_MODEL) + ".json")
-    default_f5_ckpt = voice.TTS_MODEL_DIR / "model_1250000.safetensors"
-    default_f5_vocoder = voice.MODELS_DIR / "f5-tts" / "vocos-mel-24khz"
-    voice.F5_TTS_CKPT_FILE = default_f5_ckpt if engine == "f5-tts" else Path(os.getenv("F5_TTS_CKPT_FILE", str(default_f5_ckpt)))
-    voice.F5_TTS_VOCODER_DIR = default_f5_vocoder if engine == "f5-tts" else Path(os.getenv("F5_TTS_VOCODER_DIR", str(default_f5_vocoder)))
+    voice.MELOTTS_CONFIG_FILE = Path(os.getenv("MELOTTS_CONFIG_FILE", str(voice.TTS_MODEL_DIR / "config.json")))
+    voice.MELOTTS_CKPT_FILE = Path(os.getenv("MELOTTS_CKPT_FILE", str(voice.TTS_MODEL_DIR / "checkpoint.pth")))
 
 
 def create_local_voice() -> voice.TextToSpeech:

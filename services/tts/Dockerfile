@@ -2,8 +2,8 @@ FROM ubuntu:20.04
 
 ARG JETSON_L4T_PLATFORM=t234
 ARG JETSON_TORCH_WHEEL_URL=https://developer.download.nvidia.com/compute/redist/jp/v512/pytorch/torch-2.1.0a0+41361538.nv23.06-cp38-cp38-linux_aarch64.whl
-ARG COSYVOICE_GIT_REF=v2.0
-ARG VOICE_RUNTIME_FEATURES="tts-piper tts-melotts tts-sherpa tts-f5 tts-cosyvoice"
+ARG MELOTTS_SOURCE_REF=209145371cff8fc3bd60d7be902ea69cbdb7965a
+ARG VOICE_RUNTIME_FEATURES="tts-melotts tts-sherpa"
 ARG CHAT2ME_DOWNLOAD_RETRIES=10
 ARG CHAT2ME_GIT_RETRIES=5
 ARG CHAT2ME_PIP_RETRIES=10
@@ -45,22 +45,18 @@ COPY runtime/deps/platform /opt/chat2me-deps/platform
 RUN find /opt/chat2me-deps -type f -name "*.sh" -exec chmod +x {} + \
     && JETSON_L4T_PLATFORM="$JETSON_L4T_PLATFORM" \
        JETSON_TORCH_WHEEL_URL="$JETSON_TORCH_WHEEL_URL" \
-       COSYVOICE_GIT_REF="$COSYVOICE_GIT_REF" \
+       MELOTTS_SOURCE_REF="$MELOTTS_SOURCE_REF" \
        /opt/chat2me-deps/install.sh "$VOICE_RUNTIME_FEATURES"
 
 COPY config /defaults/config
 COPY runtime/entrypoints/audio.sh /entrypoint.sh
 COPY runtime/shared/common.py ./app/common.py
 COPY runtime/shared/voice.py ./app/voice.py
-COPY services/tts/app/engines ./app/engines
 COPY services/tts/app/main.py ./app/main.py
 RUN chmod +x /entrypoint.sh
 
-ENV COSYVOICE_CODE_DIR=/opt/CosyVoice \
-    COSYVOICE_PACKAGE_PATH=/opt/CosyVoice:/opt/CosyVoice/third_party/Matcha-TTS \
-    COSYVOICE_WHISPER_ASSETS_DIR=/opt/chat2me-whisper-assets \
-    PIPER_ESPEAK_DATA=/opt/piper/espeak-ng-data \
-    LD_LIBRARY_PATH=/opt/piper:/usr/local/cuda-11.4/targets/aarch64-linux/lib:/usr/local/cuda/lib64:/usr/lib/aarch64-linux-gnu:/usr/lib/aarch64-linux-gnu/tegra \
+ENV PYTHONPATH=/opt/MeloTTS \
+    LD_LIBRARY_PATH=/usr/local/cuda-11.4/targets/aarch64-linux/lib:/usr/local/cuda/lib64:/usr/lib/aarch64-linux-gnu:/usr/lib/aarch64-linux-gnu/tegra \
     PATH=/usr/src/tensorrt/bin:$PATH
 
 ENTRYPOINT ["/entrypoint.sh"]

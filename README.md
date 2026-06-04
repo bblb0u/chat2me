@@ -2,7 +2,7 @@
 
 Chat2Me 是一套跑在机器人硬件上的中文语音交互系统，不是面向浏览器的通用聊天 Demo。当前默认平台是 NVIDIA Jetson / ARM64，典型外设包括 ReSpeaker 麦克风阵列、ALSA 扬声器和 ESP32-S3 触摸屏。
 
-系统把唤醒词、语音识别、对话编排、LLM、语音合成、声源方向和外设状态同步拆成独立模块，通过 Docker Compose 组合运行。LLM 镜像内置 Ollama；ASR、TTS、Speech、Relay 分别构建独立镜像；ASR/TTS/LLM 可以按配置切到 OpenAI-compatible 在线服务，在线不可用时回落到本地模型。
+系统把唤醒词、语音识别、对话编排、LLM、语音合成、声源方向和外设状态同步拆成独立模块，通过 Docker Compose 组合运行。LLM 镜像内置 Ollama；ASR、TTS、Speech、Relay 分别构建独立镜像；ASR 固定使用本地 Sherpa ONNX，LLM/TTS 可以按配置切到 OpenAI-compatible 在线服务，TTS 在线不可用时回落到本地模型。
 
 ## 硬件和平台
 
@@ -53,7 +53,7 @@ Compose 中实际运行 6 个容器：
 - `chat2me-llm`：LLM 网关和本地 Ollama。
 - `chat2me-core`：业务编排、固定问答、安全过滤、对外 `/chat`。
 - `chat2me-relay`：可选外设交互桥，主动读取 `chat2me-speech /state`，并转发状态、文本和动作提示等信号。
-- `chat2me-asr`：ASR 服务，支持在线优先、本地回落。
+- `chat2me-asr`：本地 Sherpa ONNX ASR 服务。
 - `chat2me-tts`：TTS 服务，支持在线优先、本地回落。
 - `chat2me-speech`：麦克风监听、唤醒、会话流程、播放和状态接口。
 
@@ -62,9 +62,9 @@ Compose 中实际运行 6 个容器：
 - 后端语言：Python 3.11、Python 3.8/Ubuntu 20.04 ASR/TTS/Speech 镜像运行环境。
 - Web/API：FastAPI、Uvicorn、Pydantic、httpx；语音主循环和状态服务使用 `http.server`。
 - 本地 LLM：Ollama，默认 `qwen3:4b-instruct`。
-- 在线模型接口：OpenAI-compatible `/chat/completions` 或 `/responses`，在线 ASR `/audio/transcriptions`，在线 TTS `/audio/speech`。
-- ASR：SenseVoice streaming ASR、Sherpa ONNX streaming ASR、在线 ASR。
-- TTS：MeloTTS/Sherpa ONNX VITS、Piper、F5-TTS、CosyVoice、在线 TTS。
+- 在线模型接口：OpenAI-compatible `/chat/completions` 或 `/responses`，在线 TTS `/audio/speech`。
+- ASR：Sherpa ONNX streaming ASR。
+- TTS：官方 MeloTTS、Sherpa ONNX Matcha、在线 TTS。
 - 音频：sounddevice、ALSA `aplay`、ffmpeg、PyUSB、ReSpeaker USB tuning/DOA。
 - 容器：Docker Compose、Docker Hub ARM64 镜像、GitHub Actions Buildx 发布。
 - 固件：ESP-IDF 5.5.x、C/C++、LVGL、ST7796 LCD、FT6336 Touch、AXP2101 PMU。
@@ -145,40 +145,36 @@ OLLAMA_MODEL=qwen3:4b-instruct
 默认本地 ASR/TTS：
 
 ```env
-VOICE_ASR_ENGINE=sensevoice
-VOICE_ASR_MODEL=SenseVoiceSmall
+VOICE_ASR_ENGINE=sherpa
+VOICE_ASR_MODEL=sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20
 VOICE_ASR_DEVICE=auto
 VOICE_TTS_ENGINE=melotts
-VOICE_TTS_MODEL=vits-melo-tts-zh_en
+VOICE_TTS_MODEL=MeloTTS-Chinese
 VOICE_TTS_DEVICE=auto
 VOICE_KWS_PROVIDER=auto
-MELOTTS_PROVIDER=auto
+MELOTTS_LANGUAGE=ZH
+MELOTTS_SPEAKER=ZH
 SHERPA_TTS_PROVIDER=auto
-ASR_WARMUP_SECONDS=10
+ASR_WARMUP_SECONDS=3
 ASR_WARMUP_WAV_PATH=/app/assets/asr_warmup_16k.wav
 ```
 
-GPU 相关默认值使用 `auto`：运行时先尝试 CUDA/GPU provider，当前镜像或宿主机不可用时才回落 CPU。显式配置 `cuda` 或 `gpu` 时不会回落，CUDA provider 不可用会直接启动失败；需要禁止 CPU 回落时就使用显式配置。`VOICE_ASR_DEVICE=cuda:<index>` 只用于 SenseVoice 的 onnxruntime provider；Sherpa ONNX 的 KWS/ASR/TTS provider 使用 `auto/cpu/cuda/gpu`。
+GPU 相关默认值使用 `auto`：运行时先尝试 CUDA/GPU，当前镜像或宿主机不可用时才回落 CPU。显式配置 `cuda` 或 `gpu` 时不会回落，CUDA 不可用会直接启动失败；需要禁止 CPU 回落时就使用显式配置。Sherpa ONNX 的 KWS/ASR/TTS provider 使用 `auto/cpu/cuda/gpu`；MeloTTS 使用 PyTorch device，支持 `auto/cpu/cuda/gpu/cuda:<index>`。
 
-SenseVoice GPU 首次真实语音请求可能触发较长 CUDA 冷启动。`chat2me-asr` 镜像内置了 `/app/assets/asr_warmup_16k.wav`，默认会在启动阶段先跑一次完整 ASR，把这段耗时放到服务 ready 之前；也可以把 `ASR_WARMUP_WAV_PATH` 指向容器内可读的自定义 16-bit PCM WAV。设置 `ASR_WARMUP_SECONDS=0` 可关闭 warmup。
+ASR GPU 首次真实语音请求可能触发 CUDA 冷启动。`chat2me-asr` 镜像内置了 `/app/assets/asr_warmup_16k.wav`，默认会在启动阶段先跑一次完整 ASR，把这段耗时放到服务 ready 之前；也可以把 `ASR_WARMUP_WAV_PATH` 指向容器内可读的自定义 16-bit PCM WAV。设置 `ASR_WARMUP_SECONDS=0` 可关闭 warmup。
 
-在线 ASR/TTS，失败回落本地：
+在线 TTS，失败回落本地：
 
 ```env
-VOICE_ASR_ENGINE=online
-VOICE_ASR_MODEL=gpt-4o-mini-transcribe
-VOICE_ASR_FALLBACK_ENGINE=sensevoice
-VOICE_ASR_FALLBACK_MODEL=SenseVoiceSmall
-ONLINE_ASR_BASE_URL=https://api.openai.com/v1
-ONLINE_ASR_API_KEY=sk-...
-
 VOICE_TTS_ENGINE=online
 VOICE_TTS_MODEL=gpt-4o-mini-tts
 VOICE_TTS_FALLBACK_ENGINE=melotts
-VOICE_TTS_FALLBACK_MODEL=vits-melo-tts-zh_en
+VOICE_TTS_FALLBACK_MODEL=MeloTTS-Chinese
 ONLINE_TTS_BASE_URL=https://api.openai.com/v1
 ONLINE_TTS_API_KEY=sk-...
 ```
+
+ASR 不再支持在线路由，`VOICE_ASR_ENGINE` 只支持 `sherpa`。
 
 角色、固定问答和安全策略：
 
@@ -190,7 +186,7 @@ ONLINE_TTS_API_KEY=sk-...
 
 `chat2me-speech` 是语音会话入口。它启动后会：
 
-1. 周期拉取 LLM/ASR/TTS reachability，把在线可用性缓存在本地。
+1. 周期拉取 LLM/TTS reachability，把在线可用性缓存在本地。
 2. 打开 ReSpeaker 控制接口，按配置写入 AGC、降噪、VAD、AEC 参数。
 3. 用 Sherpa ONNX KWS 模型监听唤醒词。
 4. 唤醒后播放 `WAKE_RESPONSE`，进入多轮会话。
@@ -216,9 +212,10 @@ ONLINE_TTS_API_KEY=sk-...
 
 `chat2me-asr` 和 `chat2me-tts` 是独立推理服务：
 
-- 启动时创建本地模型实例；如果配置在线模式，也创建在线实例并后台探活。
-- 请求时优先使用调用方传入的 `online_available` 缓存值，避免每次请求阻塞探活。
-- 在线请求失败会自动使用本地 fallback engine/model。
+- `chat2me-asr` 启动时只创建本地 Sherpa ONNX 识别实例。
+- `chat2me-tts` 启动时创建本地 TTS；配置 `VOICE_TTS_ENGINE=online` 时也创建在线实例并后台探活。
+- TTS 请求会优先使用调用方传入的 `online_available` 缓存值，避免每次请求阻塞探活。
+- 在线 TTS 请求失败会自动使用本地 fallback engine/model。
 - ASR 输入是 16-bit PCM WAV；TTS 输出是 `audio/wav`。
 
 `chat2me-relay` 不是语音主链路的一部分。它把 `chat2me-speech /state` 暴露出来的交互状态转成外设可消费的消息，当前默认写给 ESP32-S3 屏幕固件，也可以扩展成灯光、舵机、触摸板、上位机状态同步或其他机器人交互通道。
@@ -330,9 +327,9 @@ PY
 
 | 文件 | 作用 |
 | --- | --- |
-| `services/asr/Dockerfile` | 构建 ASR 镜像，默认 `VOICE_ROLE=chat2me-asr`，只安装 ASR 服务、在线转写和 WAV 上传接口所需依赖。 |
+| `services/asr/Dockerfile` | 构建 ASR 镜像，默认 `VOICE_ROLE=chat2me-asr`，只安装 Sherpa ASR 服务和 WAV 上传接口所需依赖。 |
 | `services/asr/requirements.txt` | ASR 服务基础 Python 依赖。 |
-| `services/asr/app/main.py` | ASR FastAPI 服务入口：WAV 上传、在线/本地识别、fallback、reachability。 |
+| `services/asr/app/main.py` | ASR FastAPI 服务入口：WAV 上传、本地识别和 reachability。 |
 
 ### services/tts
 
@@ -341,8 +338,6 @@ PY
 | `services/tts/Dockerfile` | 构建 TTS 镜像，默认 `VOICE_ROLE=chat2me-tts`，只安装 TTS 服务、在线合成和本地 TTS 引擎所需依赖。 |
 | `services/tts/requirements.txt` | TTS 服务基础 Python 依赖。 |
 | `services/tts/app/main.py` | TTS FastAPI 服务入口：文本合成 WAV、在线/本地合成、fallback、reachability。 |
-| `services/tts/app/engines/f5.py` | F5-TTS 模型加载和推理适配。 |
-| `services/tts/app/engines/cosyvoice.py` | CosyVoice 运行兼容补丁和依赖路径适配。 |
 
 ### services/speech
 
@@ -375,12 +370,8 @@ PY
 | `runtime/deps/platform/jetson_torch.sh` | 模型安装脚本内部复用的 Jetson PyTorch wheel 安装工具。 |
 | `runtime/deps/speech/kws.sh` | 安装唤醒词 KWS 模型所需 Sherpa ONNX runtime。 |
 | `runtime/deps/asr/sherpa.sh` | 安装 Sherpa ASR 模型所需 Sherpa ONNX runtime。 |
-| `runtime/deps/asr/sensevoice.sh` | 安装 SenseVoice streaming ASR 依赖并做兼容补丁。 |
-| `runtime/deps/tts/piper.sh` | 下载并安装 Piper runtime。 |
-| `runtime/deps/tts/melotts.sh` | 安装 MeloTTS ONNX 模型所需 Sherpa ONNX runtime。 |
+| `runtime/deps/tts/melotts.sh` | 安装官方 MeloTTS 框架及 Jetson GPU/Torch 依赖。 |
 | `runtime/deps/tts/sherpa.sh` | 安装 Sherpa TTS 模型所需 Sherpa ONNX runtime。 |
-| `runtime/deps/tts/f5.sh` | 安装 F5-TTS 及 Jetson GPU/Torch 依赖。 |
-| `runtime/deps/tts/cosyvoice.sh` | 安装 CosyVoice、Matcha-TTS、Whisper tokenizer 资源及 GPU 依赖。 |
 
 ### firmware/display
 
@@ -413,17 +404,12 @@ PY
 
 ASR：
 
-- `sensevoice`：`SenseVoiceSmall`
 - `sherpa`：`sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20`
-- `online`：OpenAI-compatible `/audio/transcriptions`
 
 TTS：
 
-- `piper`：`zh_CN-huayan-medium`
-- `melotts`：`vits-melo-tts-zh_en`
+- `melotts`：`MeloTTS-Chinese`
 - `sherpa`：`matcha-icefall-zh-en`
-- `f5-tts`：`F5TTS_v1_Base`
-- `cosyvoice`：`CosyVoice-300M-SFT`、`CosyVoice-300M-Instruct`
 - `online`：OpenAI-compatible `/audio/speech`
 
 LLM：
@@ -457,5 +443,5 @@ DISPLAY_SERIAL_BAUD=115200
 - `docker-compose.yml` 使用 `runtime: nvidia` 和 ARM64 镜像，默认更适合 Jetson 设备。
 - `chat2me-speech` 需要访问 `/dev/snd`、`/dev/bus/usb` 和宿主机 ALSA 配置。
 - `chat2me-relay` 通过挂载 `/dev` 到 `/host-dev` 查找 ESP32 或其他串口外设；不启动它不影响唤醒、收音、ASR/TTS 和对话。
-- 在线模式不代表每次请求都先探测网络；服务会后台探活，请求使用最近缓存状态。
+- LLM/TTS 在线模式不代表每次请求都先探测网络；服务会后台探活，请求使用最近缓存状态。
 - 修改 `config/*` 只影响新初始化的配置；已有部署请改 `data/config/*`。

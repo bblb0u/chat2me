@@ -20,23 +20,11 @@ for feature in $features; do
     asr-sherpa)
       /opt/chat2me-deps/asr/sherpa.sh
       ;;
-    asr-sensevoice)
-      /opt/chat2me-deps/asr/sensevoice.sh
-      ;;
-    tts-piper)
-      /opt/chat2me-deps/tts/piper.sh
-      ;;
     tts-melotts)
       /opt/chat2me-deps/tts/melotts.sh
       ;;
     tts-sherpa)
       /opt/chat2me-deps/tts/sherpa.sh
-      ;;
-    tts-f5)
-      /opt/chat2me-deps/tts/f5.sh
-      ;;
-    tts-cosyvoice)
-      /opt/chat2me-deps/tts/cosyvoice.sh
       ;;
     none)
       ;;

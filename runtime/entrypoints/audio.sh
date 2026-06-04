@@ -161,7 +161,7 @@ resolve_kws_model() {
 }
 
 resolve_asr_model() {
-  VOICE_ASR_ENGINE="$(normalize_key "${VOICE_ASR_ENGINE:-sensevoice}")"
+  VOICE_ASR_ENGINE="$(normalize_key "${VOICE_ASR_ENGINE:-sherpa}")"
   case "$VOICE_ASR_ENGINE" in
     sherpa)
       VOICE_ASR_ENGINE="sherpa"
@@ -175,27 +175,8 @@ resolve_asr_model() {
           ;;
       esac
       ;;
-    sensevoice)
-      VOICE_ASR_MODEL="${VOICE_ASR_MODEL:-SenseVoiceSmall}"
-      case "$VOICE_ASR_MODEL" in
-        SenseVoiceSmall)
-          ASR_HF_REPO_ID="haixuantao/SenseVoiceSmall-onnx"
-          ASR_HF_REVISION="main"
-          ASR_REQUIRED_FILES="config.yaml,model_quant.onnx,am.mvn,tokens.json"
-          VAD_HF_REPO_ID="manyeyes/speech_fsmn_vad_zh-cn-16k-common-onnx"
-          VAD_HF_REVISION="main"
-          VAD_REQUIRED_FILES="model_quant.onnx,vad.mvn"
-          ;;
-        *)
-          known_value_error "VOICE_ASR_MODEL" "$VOICE_ASR_MODEL" "SenseVoiceSmall"
-          ;;
-      esac
-      ;;
-    online)
-      VOICE_ASR_MODEL="${VOICE_ASR_MODEL:-gpt-4o-mini-transcribe}"
-      ;;
     *)
-      known_value_error "VOICE_ASR_ENGINE" "$VOICE_ASR_ENGINE" "sherpa, sensevoice, online"
+      known_value_error "VOICE_ASR_ENGINE" "$VOICE_ASR_ENGINE" "sherpa"
       ;;
   esac
 }
@@ -203,27 +184,16 @@ resolve_asr_model() {
 resolve_tts_model() {
   VOICE_TTS_ENGINE="$(normalize_key "${VOICE_TTS_ENGINE:-melotts}")"
   case "$VOICE_TTS_ENGINE" in
-    piper)
-      VOICE_TTS_MODEL="${VOICE_TTS_MODEL:-zh_CN-huayan-medium}"
-      case "$VOICE_TTS_MODEL" in
-        zh_CN-huayan-medium)
-          PIPER_MODEL_URL="https://huggingface.co/rhasspy/piper-voices/resolve/main/zh/zh_CN/huayan/medium/zh_CN-huayan-medium.onnx"
-          PIPER_CONFIG_URL="https://huggingface.co/rhasspy/piper-voices/resolve/main/zh/zh_CN/huayan/medium/zh_CN-huayan-medium.onnx.json"
-          ;;
-        *)
-          known_value_error "VOICE_TTS_MODEL" "$VOICE_TTS_MODEL" "zh_CN-huayan-medium"
-          ;;
-      esac
-      ;;
     melotts)
-      VOICE_TTS_MODEL="${VOICE_TTS_MODEL:-vits-melo-tts-zh_en}"
+      VOICE_TTS_MODEL="${VOICE_TTS_MODEL:-MeloTTS-Chinese}"
       case "$VOICE_TTS_MODEL" in
-        vits-melo-tts-zh_en)
-          MELOTTS_MODEL_URL="https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-melo-tts-zh_en.tar.bz2"
-          MELOTTS_REQUIRED_FILES="model.onnx,tokens.txt,lexicon.txt,dict/jieba.dict.utf8,phone.fst,date.fst,number.fst,new_heteronym.fst"
+        MeloTTS-Chinese)
+          MELOTTS_HF_REPO_ID="myshell-ai/MeloTTS-Chinese"
+          MELOTTS_HF_REVISION="main"
+          MELOTTS_REQUIRED_FILES="config.json,checkpoint.pth"
           ;;
         *)
-          known_value_error "VOICE_TTS_MODEL" "$VOICE_TTS_MODEL" "vits-melo-tts-zh_en"
+          known_value_error "VOICE_TTS_MODEL" "$VOICE_TTS_MODEL" "MeloTTS-Chinese"
           ;;
       esac
       ;;
@@ -240,46 +210,11 @@ resolve_tts_model() {
           ;;
       esac
       ;;
-    f5-tts)
-      VOICE_TTS_MODEL="${VOICE_TTS_MODEL:-F5TTS_v1_Base}"
-      case "$VOICE_TTS_MODEL" in
-        F5TTS_v1_Base)
-          F5_TTS_HF_REPO_ID="SWivid/F5-TTS"
-          F5_TTS_HF_REVISION="main"
-          F5_TTS_CKPT_REMOTE_FILE="F5TTS_v1_Base/model_1250000.safetensors"
-          F5_TTS_VOCAB_REMOTE_FILE="F5TTS_v1_Base/vocab.txt"
-          F5_TTS_VOCODER_HF_REPO_ID="charactr/vocos-mel-24khz"
-          F5_TTS_VOCODER_HF_REVISION="main"
-          F5_TTS_VOCODER_REQUIRED_FILES="config.yaml,pytorch_model.bin"
-          ;;
-        *)
-          known_value_error "VOICE_TTS_MODEL" "$VOICE_TTS_MODEL" "F5TTS_v1_Base"
-          ;;
-      esac
-      ;;
-    cosyvoice)
-      VOICE_TTS_MODEL="${VOICE_TTS_MODEL:-CosyVoice-300M-SFT}"
-      case "$VOICE_TTS_MODEL" in
-        CosyVoice-300M-SFT)
-          COSYVOICE_HF_REPO_ID="FunAudioLLM/CosyVoice-300M-SFT"
-          COSYVOICE_HF_REVISION="main"
-          COSYVOICE_REQUIRED_FILES="cosyvoice.yaml,flow.pt,hift.pt,llm.pt,spk2info.pt,campplus.onnx,speech_tokenizer_v1.onnx"
-          ;;
-        CosyVoice-300M-Instruct)
-          COSYVOICE_HF_REPO_ID="FunAudioLLM/CosyVoice-300M-Instruct"
-          COSYVOICE_HF_REVISION="main"
-          COSYVOICE_REQUIRED_FILES="cosyvoice.yaml,flow.pt,hift.pt,llm.pt,spk2info.pt,campplus.onnx,speech_tokenizer_v1.onnx"
-          ;;
-        *)
-          known_value_error "VOICE_TTS_MODEL" "$VOICE_TTS_MODEL" "CosyVoice-300M-SFT, CosyVoice-300M-Instruct"
-          ;;
-      esac
-      ;;
     online)
       VOICE_TTS_MODEL="${VOICE_TTS_MODEL:-gpt-4o-mini-tts}"
       ;;
     *)
-      known_value_error "VOICE_TTS_ENGINE" "$VOICE_TTS_ENGINE" "piper, melotts, sherpa, f5-tts, cosyvoice, online"
+      known_value_error "VOICE_TTS_ENGINE" "$VOICE_TTS_ENGINE" "melotts, sherpa, online"
       ;;
   esac
 }
@@ -510,28 +445,18 @@ sherpa_tts_model_ok() {
 }
 
 melotts_runtime_ok() {
-  python_module_ok sherpa_onnx
+  python_module_ok torch \
+    && python_module_ok melo.api \
+    && python_module_ok soundfile \
+    && python_module_ok transformers \
+    && python_module_ok pypinyin \
+    && python_module_ok cn2an \
+    && python_module_ok jieba
 }
 
 melotts_model_ok() {
   required_relative_files_ok "$TTS_MODEL_DIR" "$MELOTTS_REQUIRED_FILES" \
     && melotts_runtime_ok
-}
-
-piper_runtime_ok() {
-  command -v piper >/dev/null 2>&1 \
-    && [ -d "${PIPER_ESPEAK_DATA:-/opt/piper/espeak-ng-data}" ]
-}
-
-piper_model_ok() {
-  required_files_ok \
-    "$TTS_MODEL_DIR/model.onnx" \
-    "$TTS_MODEL_DIR/model.onnx.json" \
-    && piper_runtime_ok
-}
-
-cosyvoice_model_ok() {
-  required_relative_files_ok "$TTS_MODEL_DIR" "$COSYVOICE_REQUIRED_FILES"
 }
 
 dir_has_files() {
@@ -558,31 +483,6 @@ required_relative_files_ok() {
     [ -n "$relative_file" ] || continue
     required_files_ok "$base_dir/$relative_file" || return 1
   done
-}
-
-sensevoice_model_ok() {
-  sensevoice_runtime_ok \
-    && required_relative_files_ok "$ASR_MODEL" "$ASR_REQUIRED_FILES" \
-    && sensevoice_vad_files_ok
-}
-
-sensevoice_asr_model_ok() {
-  sensevoice_runtime_ok \
-    && required_relative_files_ok "$ASR_MODEL" "$ASR_REQUIRED_FILES"
-}
-
-sensevoice_vad_model_ok() {
-  sensevoice_runtime_ok \
-    && sensevoice_vad_files_ok
-}
-
-sensevoice_vad_files_ok() {
-  required_relative_files_ok "$VAD_MODEL_DIR" "$VAD_REQUIRED_FILES" || return 1
-  if [ -s "$VAD_MODEL_DIR/vad.mvn" ] || [ -s "$VAD_MODEL_DIR/am.mvn" ]; then
-    return 0
-  fi
-  echo "Missing VAD CMVN file: $VAD_MODEL_DIR/vad.mvn or $VAD_MODEL_DIR/am.mvn"
-  return 1
 }
 
 python_module_ok() {
@@ -674,76 +574,7 @@ ensure_melotts_runtime() {
   if melotts_runtime_ok; then
     return
   fi
-  missing_image_dependency "MeloTTS ONNX runtime"
-}
-
-ensure_piper_runtime() {
-  if piper_runtime_ok; then
-    return
-  fi
-  missing_image_dependency "Piper runtime"
-}
-
-sensevoice_runtime_ok() {
-  python_module_ok sense_voice_streaming_asr \
-    && python_module_ok onnxruntime \
-    && python_module_ok kaldi_native_fbank \
-    && python_module_ok sentencepiece
-}
-
-ensure_sensevoice_runtime() {
-  if sensevoice_runtime_ok; then
-    case "$(normalize_key "${VOICE_ASR_DEVICE:-auto}")" in
-      cuda|gpu|cuda:*)
-        if ! python3 <<'PY'
-import sys
-
-import onnxruntime
-
-providers = set(onnxruntime.get_available_providers())
-sys.exit(0 if "CUDAExecutionProvider" in providers else 1)
-PY
-        then
-          missing_image_dependency "onnxruntime CUDAExecutionProvider"
-        fi
-        ;;
-    esac
-    return
-  fi
-  missing_image_dependency "SenseVoice streaming ASR runtime"
-}
-
-cosyvoice_runtime_ok() {
-  python_module_ok torch \
-    && python_module_ok onnxruntime \
-    && python_module_ok hyperpyyaml \
-    && python_module_ok transformers \
-    && python_module_ok librosa \
-    && python_module_ok scipy \
-    && python_module_ok cosyvoice.cli.cosyvoice \
-    && python_module_ok matcha
-}
-
-ensure_cosyvoice_runtime() {
-  COSYVOICE_CODE_DIR="${COSYVOICE_CODE_DIR:-/opt/CosyVoice}"
-  export COSYVOICE_PACKAGE_PATH="${COSYVOICE_PACKAGE_PATH:-$COSYVOICE_CODE_DIR:$COSYVOICE_CODE_DIR/third_party/Matcha-TTS}"
-  export PYTHONPATH="$COSYVOICE_PACKAGE_PATH${PYTHONPATH:+:$PYTHONPATH}"
-  [ -d "$COSYVOICE_CODE_DIR/cosyvoice" ] || missing_image_dependency "CosyVoice code directory '$COSYVOICE_CODE_DIR/cosyvoice'"
-  [ -d "$COSYVOICE_CODE_DIR/third_party/Matcha-TTS/matcha" ] || missing_image_dependency "Matcha-TTS code directory '$COSYVOICE_CODE_DIR/third_party/Matcha-TTS/matcha'"
-  if ! cosyvoice_runtime_ok; then
-    missing_image_dependency "CosyVoice runtime"
-  fi
-  case "$(normalize_key "${VOICE_TTS_DEVICE:-auto}")" in
-    auto|cuda|gpu|cuda:*) verify_torch_cuda_runtime ;;
-    *)
-      echo "CosyVoice requires GPU. Set VOICE_TTS_DEVICE=cuda or auto." >&2
-      exit 1
-      ;;
-  esac
-}
-
-ensure_online_asr_runtime() {
-  require_python_module httpx
+  missing_image_dependency "MeloTTS runtime"
 }
 
 ensure_online_tts_runtime() {
@@ -751,31 +582,6 @@ ensure_online_tts_runtime() {
   case "$(normalize_key "${ONLINE_TTS_RESPONSE_FORMAT:-pcm}")" in
     pcm) ;;
     *) require_command ffmpeg ;;
-  esac
-}
-
-f5_tts_runtime_ok() {
-  python_module_ok torch \
-    && python_module_ok f5_tts \
-    && python_module_ok vocos \
-    && python_module_ok safetensors \
-    && python_module_ok soundfile \
-    && python_module_ok scipy \
-    && python_module_ok pypinyin \
-    && python_module_ok rjieba \
-    && python_module_ok x_transformers \
-    && python_module_ok torchdiffeq \
-    && python_module_ok einops \
-    && python_module_ok librosa \
-    && python_module_ok importlib_resources
-}
-
-ensure_f5_tts_runtime() {
-  if ! f5_tts_runtime_ok; then
-    missing_image_dependency "F5-TTS runtime"
-  fi
-  case "$(normalize_key "${VOICE_TTS_DEVICE:-auto}")" in
-    cuda|gpu|cuda:*) verify_torch_cuda_runtime ;;
   esac
 }
 
@@ -787,33 +593,19 @@ ensure_selected_runtimes() {
   if model_selected speech || model_selected asr-service; then
     case "$VOICE_ASR_ENGINE" in
       sherpa) ensure_sherpa_asr_runtime ;;
-      sensevoice) ensure_sensevoice_runtime ;;
-      online) ensure_online_asr_runtime ;;
     esac
-    if [ "$VOICE_ASR_ENGINE" = "online" ]; then
-      case "${VOICE_ASR_FALLBACK_ENGINE:-sensevoice}" in
-        sherpa) ensure_sherpa_asr_runtime ;;
-        sensevoice) ensure_sensevoice_runtime ;;
-      esac
-    fi
   fi
 
   if model_selected speech || model_selected tts-service; then
     case "$VOICE_TTS_ENGINE" in
-      piper) ensure_piper_runtime ;;
       melotts) ensure_melotts_runtime ;;
       sherpa) ensure_sherpa_tts_runtime ;;
-      f5-tts) ensure_f5_tts_runtime ;;
-      cosyvoice) ensure_cosyvoice_runtime ;;
       online) ensure_online_tts_runtime ;;
     esac
     if [ "$VOICE_TTS_ENGINE" = "online" ]; then
       case "${VOICE_TTS_FALLBACK_ENGINE:-melotts}" in
-        piper) ensure_piper_runtime ;;
         melotts) ensure_melotts_runtime ;;
         sherpa) ensure_sherpa_tts_runtime ;;
-        f5-tts) ensure_f5_tts_runtime ;;
-        cosyvoice) ensure_cosyvoice_runtime ;;
       esac
     fi
   fi
@@ -1060,128 +852,13 @@ ensure_sherpa_tts_model() {
 }
 
 ensure_melotts_model() {
-  if melotts_model_ok; then
-    echo "melotts $VOICE_TTS_MODEL is ready"
-    return
-  fi
-
-  echo "melotts $VOICE_TTS_MODEL is missing or invalid; re-downloading"
-  download_and_extract "$VOICE_TTS_MODEL" "$MELOTTS_MODEL_URL" "$TTS_MODEL_DIR"
-
-  echo "[models] validating melotts $VOICE_TTS_MODEL"
-  if ! melotts_model_ok; then
-    echo "melotts $VOICE_TTS_MODEL is still invalid after download" >&2
-    exit 1
-  fi
-}
-
-ensure_piper_model() {
-  if piper_model_ok; then
-    echo "piper $VOICE_TTS_MODEL is ready"
-    return
-  fi
-
-  echo "piper $VOICE_TTS_MODEL is missing or invalid; re-downloading"
-  rm -rf "$TTS_MODEL_DIR"
-  download_with_progress "$TTS_MODEL_DIR/model.onnx" "$PIPER_MODEL_URL" "$VOICE_TTS_MODEL.onnx"
-  download_with_progress "$TTS_MODEL_DIR/model.onnx.json" "$PIPER_CONFIG_URL" "$VOICE_TTS_MODEL.onnx.json"
-
-  echo "[models] validating piper $VOICE_TTS_MODEL"
-  if ! piper_model_ok; then
-    echo "piper $VOICE_TTS_MODEL is still invalid after download" >&2
-    exit 1
-  fi
-}
-
-ensure_cosyvoice_model() {
   ensure_hf_snapshot_model \
     "$VOICE_TTS_MODEL" \
-    "$COSYVOICE_HF_REPO_ID" \
-    "$COSYVOICE_HF_REVISION" \
-    cosyvoice_model_ok \
+    "$MELOTTS_HF_REPO_ID" \
+    "$MELOTTS_HF_REVISION" \
+    melotts_model_ok \
     "$TTS_MODEL_DIR" \
-    "$COSYVOICE_REQUIRED_FILES"
-}
-
-f5_tts_model_ok() {
-  required_files_ok \
-    "$TTS_MODEL_DIR/model_1250000.safetensors" \
-    "$TTS_MODEL_DIR/vocab.txt" \
-    "$TTS_MODEL_DIR/config.yaml" \
-    "$MODELS_DIR/f5-tts/vocos-mel-24khz/config.yaml" \
-    "$MODELS_DIR/f5-tts/vocos-mel-24khz/pytorch_model.bin"
-}
-
-copy_f5_tts_config() {
-  python3 - "$VOICE_TTS_MODEL" "$TTS_MODEL_DIR/config.yaml" <<'PY'
-import shutil
-import sys
-from pathlib import Path
-
-try:
-    from importlib.resources import files
-except ImportError:
-    from importlib_resources import files
-
-model_name = sys.argv[1]
-target = Path(sys.argv[2])
-source = files("f5_tts").joinpath("configs", f"{model_name}.yaml")
-if not source.is_file():
-    print(f"missing f5_tts config resource: configs/{model_name}.yaml", file=sys.stderr)
-    sys.exit(1)
-
-target.parent.mkdir(parents=True, exist_ok=True)
-with source.open("rb") as input_file, target.open("wb") as output_file:
-    shutil.copyfileobj(input_file, output_file)
-PY
-}
-
-ensure_f5_tts_model() {
-  if f5_tts_model_ok; then
-    echo "f5-tts $VOICE_TTS_MODEL is ready"
-    return
-  fi
-
-  echo "f5-tts $VOICE_TTS_MODEL is missing or invalid; re-downloading"
-  rm -rf "$TTS_MODEL_DIR"
-  mkdir -p "$TTS_MODEL_DIR"
-  download_hf_file \
-    "$TTS_MODEL_DIR/model_1250000.safetensors" \
-    "$F5_TTS_HF_REPO_ID" \
-    "$F5_TTS_HF_REVISION" \
-    "$F5_TTS_CKPT_REMOTE_FILE"
-  download_hf_file \
-    "$TTS_MODEL_DIR/vocab.txt" \
-    "$F5_TTS_HF_REPO_ID" \
-    "$F5_TTS_HF_REVISION" \
-    "$F5_TTS_VOCAB_REMOTE_FILE"
-  copy_f5_tts_config
-
-  ensure_hf_snapshot_model \
-    "vocos-mel-24khz" \
-    "$F5_TTS_VOCODER_HF_REPO_ID" \
-    "$F5_TTS_VOCODER_HF_REVISION" \
-    f5_tts_vocoder_files_ok \
-    "$MODELS_DIR/f5-tts/vocos-mel-24khz" \
-    "$F5_TTS_VOCODER_REQUIRED_FILES"
-
-  echo "[models] validating f5-tts $VOICE_TTS_MODEL"
-  if ! f5_tts_model_ok; then
-    echo "f5-tts $VOICE_TTS_MODEL is still invalid after download" >&2
-    exit 1
-  fi
-}
-
-f5_tts_checkpoint_files_ok() {
-  required_files_ok \
-    "$TTS_MODEL_DIR/model_1250000.safetensors" \
-    "$TTS_MODEL_DIR/vocab.txt"
-}
-
-f5_tts_vocoder_files_ok() {
-  required_files_ok \
-    "$MODELS_DIR/f5-tts/vocos-mel-24khz/config.yaml" \
-    "$MODELS_DIR/f5-tts/vocos-mel-24khz/pytorch_model.bin"
+    "$MELOTTS_REQUIRED_FILES"
 }
 
 init_config
@@ -1196,38 +873,27 @@ resolve_tts_model
 : "${AUDIO_SAMPLE_RATE:?AUDIO_SAMPLE_RATE must be set in runtime.env}"
 KWS_MODEL="$MODELS_DIR/$KWS_MODEL_NAME"
 ASR_MODEL="$MODELS_DIR/$VOICE_ASR_ENGINE/$VOICE_ASR_MODEL"
-VAD_MODEL_DIR="$MODELS_DIR/$VOICE_ASR_ENGINE/speech_fsmn_vad_zh-cn-16k-common-onnx"
 TTS_MODEL_DIR="$MODELS_DIR/$VOICE_TTS_ENGINE/$VOICE_TTS_MODEL"
 export VOICE_ASR_ENGINE
 export VOICE_ASR_MODEL
 export VOICE_TTS_ENGINE
 export VOICE_TTS_MODEL
-export SENSEVOICE_MODEL_DIR="$ASR_MODEL"
-export SENSEVOICE_VAD_MODEL_DIR="$VAD_MODEL_DIR"
 ORIGINAL_VOICE_ASR_ENGINE="$VOICE_ASR_ENGINE"
 ORIGINAL_VOICE_ASR_MODEL="$VOICE_ASR_MODEL"
 ORIGINAL_VOICE_TTS_ENGINE="$VOICE_TTS_ENGINE"
 ORIGINAL_VOICE_TTS_MODEL="$VOICE_TTS_MODEL"
 
 prepare_asr_download_target() {
-  if [ "$ORIGINAL_VOICE_ASR_ENGINE" = "online" ]; then
-    VOICE_ASR_ENGINE="${VOICE_ASR_FALLBACK_ENGINE:-sensevoice}"
-    VOICE_ASR_MODEL="${VOICE_ASR_FALLBACK_MODEL:-SenseVoiceSmall}"
-  else
-    VOICE_ASR_ENGINE="$ORIGINAL_VOICE_ASR_ENGINE"
-    VOICE_ASR_MODEL="$ORIGINAL_VOICE_ASR_MODEL"
-  fi
+  VOICE_ASR_ENGINE="$ORIGINAL_VOICE_ASR_ENGINE"
+  VOICE_ASR_MODEL="$ORIGINAL_VOICE_ASR_MODEL"
   resolve_asr_model
   ASR_MODEL="$MODELS_DIR/$VOICE_ASR_ENGINE/$VOICE_ASR_MODEL"
-  VAD_MODEL_DIR="$MODELS_DIR/$VOICE_ASR_ENGINE/speech_fsmn_vad_zh-cn-16k-common-onnx"
-  export SENSEVOICE_MODEL_DIR="$ASR_MODEL"
-  export SENSEVOICE_VAD_MODEL_DIR="$VAD_MODEL_DIR"
 }
 
 prepare_tts_download_target() {
   if [ "$ORIGINAL_VOICE_TTS_ENGINE" = "online" ]; then
     VOICE_TTS_ENGINE="${VOICE_TTS_FALLBACK_ENGINE:-melotts}"
-    VOICE_TTS_MODEL="${VOICE_TTS_FALLBACK_MODEL:-vits-melo-tts-zh_en}"
+    VOICE_TTS_MODEL="${VOICE_TTS_FALLBACK_MODEL:-MeloTTS-Chinese}"
   else
     VOICE_TTS_ENGINE="$ORIGINAL_VOICE_TTS_ENGINE"
     VOICE_TTS_MODEL="$ORIGINAL_VOICE_TTS_MODEL"
@@ -1244,61 +910,31 @@ restore_runtime_model_selection() {
   resolve_asr_model
   resolve_tts_model
   ASR_MODEL="$MODELS_DIR/$VOICE_ASR_ENGINE/$VOICE_ASR_MODEL"
-  VAD_MODEL_DIR="$MODELS_DIR/$VOICE_ASR_ENGINE/speech_fsmn_vad_zh-cn-16k-common-onnx"
   TTS_MODEL_DIR="$MODELS_DIR/$VOICE_TTS_ENGINE/$VOICE_TTS_MODEL"
   export VOICE_ASR_ENGINE
   export VOICE_ASR_MODEL
   export VOICE_TTS_ENGINE
   export VOICE_TTS_MODEL
-  export SENSEVOICE_MODEL_DIR="$ASR_MODEL"
-  export SENSEVOICE_VAD_MODEL_DIR="$VAD_MODEL_DIR"
 }
 
 MODEL_SET="$(default_voice_model_set)"
 if model_selected speech || model_selected asr-service; then
   case "$VOICE_ASR_ENGINE" in
     sherpa) MODEL_SET="$MODEL_SET,asr" ;;
-    sensevoice) MODEL_SET="$MODEL_SET,sensevoice" ;;
-    online) ;;
   esac
-  if [ "$VOICE_ASR_ENGINE" = "online" ]; then
-    VOICE_ASR_FALLBACK_ENGINE="${VOICE_ASR_FALLBACK_ENGINE:-sensevoice}"
-    VOICE_ASR_FALLBACK_MODEL="${VOICE_ASR_FALLBACK_MODEL:-SenseVoiceSmall}"
-    case "$VOICE_ASR_FALLBACK_ENGINE" in
-      sherpa)
-        saved_engine="$VOICE_ASR_ENGINE"
-        saved_model="$VOICE_ASR_MODEL"
-        VOICE_ASR_ENGINE="$VOICE_ASR_FALLBACK_ENGINE"
-        VOICE_ASR_MODEL="$VOICE_ASR_FALLBACK_MODEL"
-        resolve_asr_model
-        MODEL_SET="$MODEL_SET,asr"
-        VOICE_ASR_ENGINE="$saved_engine"
-        VOICE_ASR_MODEL="$saved_model"
-        resolve_asr_model
-        ;;
-      sensevoice) MODEL_SET="$MODEL_SET,sensevoice" ;;
-      *) echo "VOICE_ASR_FALLBACK_ENGINE '$VOICE_ASR_FALLBACK_ENGINE' is not supported" >&2; exit 1 ;;
-    esac
-  fi
 fi
 if model_selected speech || model_selected tts-service; then
   case "$VOICE_TTS_ENGINE" in
-    piper) MODEL_SET="$MODEL_SET,piper" ;;
     melotts) MODEL_SET="$MODEL_SET,melotts" ;;
     sherpa) MODEL_SET="$MODEL_SET,sherpa-tts" ;;
-    f5-tts) MODEL_SET="$MODEL_SET,f5-tts" ;;
-    cosyvoice) MODEL_SET="$MODEL_SET,cosyvoice" ;;
     online) ;;
   esac
   if [ "$VOICE_TTS_ENGINE" = "online" ]; then
     VOICE_TTS_FALLBACK_ENGINE="${VOICE_TTS_FALLBACK_ENGINE:-melotts}"
-    VOICE_TTS_FALLBACK_MODEL="${VOICE_TTS_FALLBACK_MODEL:-vits-melo-tts-zh_en}"
+    VOICE_TTS_FALLBACK_MODEL="${VOICE_TTS_FALLBACK_MODEL:-MeloTTS-Chinese}"
     case "$VOICE_TTS_FALLBACK_ENGINE" in
-      piper) MODEL_SET="$MODEL_SET,piper" ;;
       melotts) MODEL_SET="$MODEL_SET,melotts" ;;
       sherpa) MODEL_SET="$MODEL_SET,sherpa-tts" ;;
-      f5-tts) MODEL_SET="$MODEL_SET,f5-tts" ;;
-      cosyvoice) MODEL_SET="$MODEL_SET,cosyvoice" ;;
       *) echo "VOICE_TTS_FALLBACK_ENGINE '$VOICE_TTS_FALLBACK_ENGINE' is not supported" >&2; exit 1 ;;
     esac
   fi
@@ -1370,46 +1006,9 @@ if model_selected sherpa-tts; then
   ensure_sherpa_tts_model
 fi
 
-if model_selected piper; then
-  prepare_tts_download_target
-  ensure_piper_model
-fi
-
 if model_selected melotts; then
   prepare_tts_download_target
   ensure_melotts_model
-fi
-
-if model_selected sensevoice; then
-  prepare_asr_download_target
-  ensure_hf_snapshot_model \
-    "$VOICE_ASR_MODEL" \
-    "$ASR_HF_REPO_ID" \
-    "$ASR_HF_REVISION" \
-    sensevoice_asr_model_ok \
-    "$ASR_MODEL" \
-    "$ASR_REQUIRED_FILES"
-  ensure_hf_snapshot_model \
-    "speech_fsmn_vad_zh-cn-16k-common-onnx" \
-    "$VAD_HF_REPO_ID" \
-    "$VAD_HF_REVISION" \
-    sensevoice_vad_model_ok \
-    "$VAD_MODEL_DIR" \
-    "$VAD_REQUIRED_FILES"
-  if ! sensevoice_model_ok; then
-    echo "sensevoice $VOICE_ASR_MODEL is still invalid after download" >&2
-    exit 1
-  fi
-fi
-
-if model_selected f5-tts; then
-  prepare_tts_download_target
-  ensure_f5_tts_model
-fi
-
-if model_selected cosyvoice; then
-  prepare_tts_download_target
-  ensure_cosyvoice_model
 fi
 
 trap - EXIT HUP INT TERM

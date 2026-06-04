@@ -18,8 +18,6 @@ import httpx
 import sounddevice as sd
 
 from app.voice import (
-    ASR_ROUTE_CACHE,
-    ASR_ROUTE_CACHE_LOCK,
     ASR_SERVICE_URL,
     CHUNK_SECONDS,
     CORE_URL,
@@ -55,7 +53,6 @@ from app.voice import (
     select_input_device,
     spoken_text,
     speak_pausing_input,
-    start_asr_route_cache,
     start_llm_route_cache,
     start_tts_route_cache,
     wake_words_display,
@@ -248,7 +245,6 @@ def timed_post_asr(client: httpx.Client, wav_bytes: bytes) -> dict[str, object]:
     started = time.perf_counter()
     response = client.post(
         ASR_SERVICE_URL,
-        data={"online_available": "1" if route_cache_online(ASR_ROUTE_CACHE, ASR_ROUTE_CACHE_LOCK) else "0"},
         files={"file": ("diagnostic.wav", wav_bytes, "audio/wav")},
     )
     wall_ms = int((time.perf_counter() - started) * 1000)
@@ -615,7 +611,6 @@ def run_session(recognizer, voice, tts_config, display: SpeechState, beep_path: 
 def main() -> None:
     log(f"core url: {CORE_URL}")
     start_llm_route_cache()
-    start_asr_route_cache()
     start_tts_route_cache()
     log("using remote ASR service")
     recognizer = create_remote_asr()
