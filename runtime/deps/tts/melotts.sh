@@ -31,8 +31,7 @@ pip_install \
   "soundfile==0.12.1" \
   "tqdm==4.66.4" \
   "transformers==4.27.4" \
-  "txtsplit==1.0.0" \
-  "unidecode==1.3.7"
+    "unidecode==1.3.7"
 
 rm -rf /opt/MeloTTS /tmp/melotts-source
 mkdir -p /tmp/melotts-source
