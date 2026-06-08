@@ -1,38 +1,24 @@
 #!/bin/sh
 set -eu
 
-. /opt/chat2me-deps/lib/common.sh
-
-/opt/chat2me-deps/platform/jetson_gpu.sh
-/opt/chat2me-deps/platform/jetson_torch.sh
-
 MELOTTS_SOURCE_REF="${MELOTTS_SOURCE_REF:-209145371cff8fc3bd60d7be902ea69cbdb7965a}"
 MELOTTS_SOURCE_URL="${MELOTTS_SOURCE_URL:-https://github.com/myshell-ai/MeloTTS/archive/${MELOTTS_SOURCE_REF}.tar.gz}"
 
-apt_install_packages \
-  libsndfile1
-rm -rf /var/lib/apt/lists/*
-
-pip_install \
-  "anyascii==0.3.2" \
-  "cached_path==1.6.3" \
-  "cn2an==0.5.22" \
-  "eng_to_ipa==0.0.2" \
-  "g2p_en==2.1.0" \
-  "huggingface-hub==0.23.5" \
-  "inflect==7.0.0" \
-  "jieba==0.42.1" \
-  "langid==1.1.6" \
-  "loguru==0.7.2" \
-  "num2words==0.5.12" \
-  "numba==0.58.1" \
-  "pydub==0.25.1" \
-  "pypinyin==0.50.0" \
-  "scipy==1.10.1" \
-  "soundfile==0.12.1" \
-  "tqdm==4.66.4" \
-  "transformers==4.27.4" \
-  "unidecode==1.3.7"
+download_file() {
+  url="$1"
+  target="$2"
+  label="$3"
+  echo "downloading ${label}: ${url}"
+  curl -fL \
+    --retry "${CHAT2ME_DOWNLOAD_RETRIES:-10}" \
+    --retry-connrefused \
+    --connect-timeout 20 \
+    --speed-limit 1024 \
+    --speed-time 120 \
+    --show-error \
+    "$url" \
+    -o "$target"
+}
 
 rm -rf /opt/MeloTTS /tmp/melotts-source
 mkdir -p /tmp/melotts-source
@@ -110,11 +96,129 @@ text_init.write_text(text_init_text, encoding="utf-8")
 
 api = root / "melo" / "api.py"
 api_text = api.read_text(encoding="utf-8")
+api_text = api_text.replace("from tqdm import tqdm\n", "")
 api_text = api_text.replace(
     "        self.language = 'ZH_MIX_EN' if language == 'ZH' else language # we support a ZH_MIX_EN model\n",
     "        self.language = language\n",
 )
+api_text = api_text.replace(
+    "            if position:\n"
+    "                tx = tqdm(texts, position=position)\n"
+    "            elif quiet:\n"
+    "                tx = texts\n"
+    "            else:\n"
+    "                tx = tqdm(texts)\n",
+    "            if quiet:\n"
+    "                tx = texts\n"
+    "            elif position:\n"
+    "                from tqdm import tqdm\n"
+    "                tx = tqdm(texts, position=position)\n"
+    "            else:\n"
+    "                from tqdm import tqdm\n"
+    "                tx = tqdm(texts)\n",
+)
 api.write_text(api_text, encoding="utf-8")
+
+download_utils = root / "melo" / "download_utils.py"
+download_utils_text = download_utils.read_text(encoding="utf-8")
+download_utils_text = download_utils_text.replace(
+    "from cached_path import cached_path\n"
+    "from huggingface_hub import hf_hub_download\n",
+    "",
+)
+download_utils_text = download_utils_text.replace(
+    "            config_path = hf_hub_download(\n",
+    "            from huggingface_hub import hf_hub_download\n"
+    "            config_path = hf_hub_download(\n",
+)
+download_utils_text = download_utils_text.replace(
+    '            config_path = hf_hub_download(repo_id=LANG_TO_HF_REPO_ID[language], filename="config.json")\n',
+    '            from huggingface_hub import hf_hub_download\n'
+    '            config_path = hf_hub_download(repo_id=LANG_TO_HF_REPO_ID[language], filename="config.json")\n',
+)
+download_utils_text = download_utils_text.replace(
+    "            config_path = cached_path(DOWNLOAD_CONFIG_URLS[language])\n",
+    "            from cached_path import cached_path\n"
+    "            config_path = cached_path(DOWNLOAD_CONFIG_URLS[language])\n",
+)
+download_utils_text = download_utils_text.replace(
+    "            ckpt_path = hf_hub_download(\n",
+    "            from huggingface_hub import hf_hub_download\n"
+    "            ckpt_path = hf_hub_download(\n",
+)
+download_utils_text = download_utils_text.replace(
+    '            ckpt_path = hf_hub_download(repo_id=LANG_TO_HF_REPO_ID[language], filename="checkpoint.pth")\n',
+    '            from huggingface_hub import hf_hub_download\n'
+    '            ckpt_path = hf_hub_download(repo_id=LANG_TO_HF_REPO_ID[language], filename="checkpoint.pth")\n',
+)
+download_utils_text = download_utils_text.replace(
+    "            ckpt_path = cached_path(DOWNLOAD_CKPT_URLS[language])\n",
+    "            from cached_path import cached_path\n"
+    "            ckpt_path = cached_path(DOWNLOAD_CKPT_URLS[language])\n",
+)
+download_utils_text = download_utils_text.replace(
+    "    return [cached_path(url) for url in PRETRAINED_MODELS.values()]\n",
+    "    from cached_path import cached_path\n"
+    "    return [cached_path(url) for url in PRETRAINED_MODELS.values()]\n",
+)
+download_utils.write_text(download_utils_text, encoding="utf-8")
+
+utils = root / "melo" / "utils.py"
+utils_text = utils.read_text(encoding="utf-8")
+utils_text = utils_text.replace("from scipy.io.wavfile import read\n", "")
+utils_text = utils_text.replace(
+    "def load_wav_to_torch(full_path):\n"
+    "    sampling_rate, data = read(full_path)\n"
+    "    return torch.FloatTensor(data.astype(np.float32)), sampling_rate\n",
+    "def load_wav_to_torch(full_path):\n"
+    "    import soundfile as sf\n"
+    "    data, sampling_rate = sf.read(full_path, dtype='float32', always_2d=False)\n"
+    "    return torch.FloatTensor(np.asarray(data, dtype=np.float32)), sampling_rate\n",
+)
+utils.write_text(utils_text, encoding="utf-8")
+
+monotonic_init = root / "melo" / "monotonic_align" / "__init__.py"
+monotonic_init.write_text(
+    "from numpy import zeros, int32, float32\n"
+    "from torch import from_numpy\n\n"
+    "try:\n"
+    "    from .core import maximum_path_jit\n"
+    "except Exception:\n"
+    "    maximum_path_jit = None\n\n"
+    "def maximum_path_fallback(paths, values, t_ys, t_xs):\n"
+    "    max_neg_val = -1e9\n"
+    "    for i in range(int(paths.shape[0])):\n"
+    "        path = paths[i]\n"
+    "        value = values[i]\n"
+    "        t_y = int(t_ys[i])\n"
+    "        t_x = int(t_xs[i])\n"
+    "        index = t_x - 1\n"
+    "        for y in range(t_y):\n"
+    "            for x in range(max(0, t_x + y - t_y), min(t_x, y + 1)):\n"
+    "                v_cur = max_neg_val if x == y else value[y - 1, x]\n"
+    "                if x == 0:\n"
+    "                    v_prev = 0.0 if y == 0 else max_neg_val\n"
+    "                else:\n"
+    "                    v_prev = value[y - 1, x - 1]\n"
+    "                value[y, x] += max(v_prev, v_cur)\n"
+    "        for y in range(t_y - 1, -1, -1):\n"
+    "            path[y, index] = 1\n"
+    "            if index != 0 and (index == y or value[y - 1, index] < value[y - 1, index - 1]):\n"
+    "                index -= 1\n\n"
+    "def maximum_path(neg_cent, mask):\n"
+    "    device = neg_cent.device\n"
+    "    dtype = neg_cent.dtype\n"
+    "    neg_cent = neg_cent.data.cpu().numpy().astype(float32)\n"
+    "    path = zeros(neg_cent.shape, dtype=int32)\n"
+    "    t_t_max = mask.sum(1)[:, 0].data.cpu().numpy().astype(int32)\n"
+    "    t_s_max = mask.sum(2)[:, 0].data.cpu().numpy().astype(int32)\n"
+    "    if maximum_path_jit is None:\n"
+    "        maximum_path_fallback(path, neg_cent, t_t_max, t_s_max)\n"
+    "    else:\n"
+    "        maximum_path_jit(path, neg_cent, t_t_max, t_s_max)\n"
+    "    return from_numpy(path).to(device=device, dtype=dtype)\n",
+    encoding="utf-8",
+)
 
 english = root / "melo" / "text" / "english.py"
 english_text = english.read_text(encoding="utf-8")

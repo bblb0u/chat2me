@@ -1,5 +1,8 @@
+click==8.1.8
 httpx==0.28.1
 numpy==1.24.4
-PyYAML==6.0.2
+pypinyin==0.53.0
 pyusb==1.2.1
+sentencepiece==0.2.0
+sherpa-onnx==1.12.38
 sounddevice==0.5.1

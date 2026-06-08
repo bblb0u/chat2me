@@ -15,9 +15,7 @@ from types import SimpleNamespace
 from typing import Any, Iterable, Protocol
 
 from app.common import DisplayClient, env_bool, env_float, env_int, env_value, log
-import httpx
 import numpy as np
-import yaml
 
 
 def env_float_compat(primary_key: str, fallback_key: str, default: str) -> float:
@@ -347,6 +345,7 @@ def asr_model_file(stem: str) -> Path:
 
 def ensure_hotwords_file() -> str:
     import sherpa_onnx
+    import yaml
 
     if not HOTWORDS_PATH.is_file():
         raise FileNotFoundError(f"missing hotwords file: {HOTWORDS_PATH}")
@@ -476,6 +475,8 @@ def cached_online_available(cache: dict[str, Any], lock: threading.Lock) -> bool
 
 
 def transcribe_remote_audio(samples: np.ndarray, sample_rate: int) -> str:
+    import httpx
+
     wav_bytes = float_audio_to_wav_bytes(samples, sample_rate)
     files = {"file": ("speech.wav", wav_bytes, "audio/wav")}
     timeout = httpx.Timeout(connect=5.0, read=COMMAND_TIMEOUT_SECONDS + 10, write=15.0, pool=5.0)
@@ -800,6 +801,8 @@ def synthesize_edge_tts_audio(text: str) -> bytes:
 
 
 def synthesize_remote_wav(text: str) -> bytes:
+    import httpx
+
     payload = {
         "text": text,
         "online_available": cached_online_available(TTS_ROUTE_CACHE, TTS_ROUTE_CACHE_LOCK),
@@ -1138,6 +1141,8 @@ def listen_command(
 
 
 def refresh_llm_route_cache() -> None:
+    import httpx
+
     try:
         timeout = min(max(LLM_ROUTE_CACHE_INTERVAL_SECONDS * 0.5, 0.2), 1.0)
         with httpx.Client(timeout=timeout) as client:
@@ -1163,6 +1168,8 @@ def refresh_llm_route_cache() -> None:
 
 
 def refresh_service_reachability(url: str, cache: dict[str, Any], lock: threading.Lock, label: str) -> None:
+    import httpx
+
     try:
         with httpx.Client(timeout=1.0) as client:
             response = client.get(url)
@@ -1228,6 +1235,8 @@ def log_llm_online_cache() -> None:
 
 
 def ask_core(text: str) -> str:
+    import httpx
+
     payload: dict[str, Any] = {
         "message": text,
         "online_available": cached_online_available(LLM_ROUTE_CACHE, LLM_ROUTE_CACHE_LOCK),

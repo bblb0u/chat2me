@@ -361,13 +361,12 @@ PY
 | `runtime/shared/voice.py` | ASR/TTS/Speech 共享语音逻辑：模型创建、远程 ASR/TTS 适配、音频读写、噪声门限、播放、服务探活缓存。 |
 | `runtime/entrypoints/config.sh` | Core 和 Relay 共用入口：首次启动时初始化 `/app/config`。 |
 | `runtime/entrypoints/audio.sh` | ASR/TTS/Speech 镜像入口：初始化配置、解析模型选择、下载/校验 KWS/ASR/TTS 模型。 |
-| `runtime/deps/install.sh` | 根据显式 feature 列表安装指定本地语音运行时依赖。 |
-| `runtime/deps/lib/common.sh` | 下载、pip、apt、git clone 的重试工具函数。 |
-| `runtime/deps/platform/jetson_gpu.sh` | 模型安装脚本内部复用的 Jetson L4T CUDA/TensorRT apt 源和 GPU 库安装工具。 |
-| `runtime/deps/platform/jetson_torch.sh` | 模型安装脚本内部复用的 Jetson PyTorch wheel 安装工具。 |
-| `runtime/deps/speech/kws.sh` | 安装唤醒词 KWS 模型所需 Sherpa ONNX runtime。 |
-| `runtime/deps/asr/sherpa.sh` | 安装 Sherpa ASR 模型所需 Sherpa ONNX runtime。 |
-| `runtime/deps/tts/melotts.sh` | 安装官方 MeloTTS 框架及 Jetson GPU/Torch 依赖。 |
+
+### services/tts build helper
+
+| 文件 | 作用 |
+| --- | --- |
+| `services/tts/install_melotts.sh` | TTS 镜像专用构建脚本：下载固定版本 MeloTTS 源码并应用中文本地模型所需补丁。Python/apt 依赖由 `services/tts/requirements.txt` 和 `services/tts/Dockerfile` 显式安装。 |
 
 ### firmware/display
 

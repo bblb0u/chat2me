@@ -1,8 +1,6 @@
 FROM ubuntu:20.04
 
-ARG VOICE_RUNTIME_FEATURES="speech-kws"
 ARG CHAT2ME_DOWNLOAD_RETRIES=10
-ARG CHAT2ME_GIT_RETRIES=5
 ARG CHAT2ME_PIP_RETRIES=10
 ARG CHAT2ME_PIP_TIMEOUT=120
 
@@ -12,16 +10,13 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     CHAT2ME_DOWNLOAD_RETRIES=${CHAT2ME_DOWNLOAD_RETRIES} \
-    CHAT2ME_GIT_RETRIES=${CHAT2ME_GIT_RETRIES} \
     CHAT2ME_PIP_RETRIES=${CHAT2ME_PIP_RETRIES} \
     CHAT2ME_PIP_TIMEOUT=${CHAT2ME_PIP_TIMEOUT}
 
 WORKDIR /app
 
-COPY runtime/deps/lib /opt/chat2me-deps/lib
-RUN chmod +x /opt/chat2me-deps/lib/common.sh \
-    && . /opt/chat2me-deps/lib/common.sh \
-    && apt_install_packages \
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
        alsa-utils \
        ca-certificates \
        curl \
@@ -30,20 +25,15 @@ RUN chmod +x /opt/chat2me-deps/lib/common.sh \
        libopenblas-base \
        libportaudio2 \
        libusb-1.0-0 \
-       portaudio19-dev \
        python3 \
-       python3-dev \
        python3-pip \
     && rm -rf /var/lib/apt/lists/*
 
 COPY services/speech/requirements.txt requirements.txt
-RUN . /opt/chat2me-deps/lib/common.sh \
-    && pip_install -r requirements.txt
-
-COPY runtime/deps/install.sh /opt/chat2me-deps/install.sh
-COPY runtime/deps/speech /opt/chat2me-deps/speech
-RUN find /opt/chat2me-deps -type f -name "*.sh" -exec chmod +x {} + \
-    && /opt/chat2me-deps/install.sh "$VOICE_RUNTIME_FEATURES"
+RUN python3 -m pip install --no-cache-dir \
+      --retries "$CHAT2ME_PIP_RETRIES" \
+      --timeout "$CHAT2ME_PIP_TIMEOUT" \
+      -r requirements.txt
 
 COPY config /defaults/config
 COPY runtime/entrypoints/audio.sh /entrypoint.sh
