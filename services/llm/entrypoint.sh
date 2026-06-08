@@ -5,7 +5,6 @@ DEFAULT_CONFIG_DIR="${DEFAULT_CONFIG_DIR:-/defaults/config}"
 CONFIG_DIR="${CONFIG_DIR:-/app/config}"
 RUNTIME_CONFIG_PATH="${RUNTIME_CONFIG_PATH:-$CONFIG_DIR/runtime.env}"
 VOICE_ROLE="${VOICE_ROLE:-chat2me-llm}"
-OLLAMA_LOG_FILE="${OLLAMA_LOG_FILE:-}"
 
 normalize_log_level() {
   case "$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')" in
@@ -176,13 +175,20 @@ pull_model_with_progress() {
 
 print_ollama_log_tail() {
   [ -f "$OLLAMA_LOG_FILE" ] || return 0
-  echo "[llm] recent Ollama log:" >&2
+  echo "[llm] recent LLM log:" >&2
   tail -n 80 "$OLLAMA_LOG_FILE" >&2 || true
+}
+
+prefix_ollama_logs() {
+  while IFS= read -r line || [ -n "$line" ]; do
+    timestamp="$(date '+%Y-%m-%dT%H:%M:%S%z')"
+    printf '%s [info] [%s] [ollama] %s\n' "$timestamp" "$VOICE_ROLE" "$line" >> "$OLLAMA_LOG_FILE" 2>/dev/null || true
+  done
 }
 
 init_config
 load_runtime_env
-OLLAMA_LOG_FILE="/app/log/$VOICE_ROLE.ollama.log"
+OLLAMA_LOG_FILE="/app/log/$VOICE_ROLE.log"
 mkdir -p "$(dirname "$OLLAMA_LOG_FILE")"
 : "${OLLAMA_MODEL:?OLLAMA_MODEL must be set in runtime.env}"
 MODEL="$OLLAMA_MODEL"
@@ -192,7 +198,13 @@ model_ok() {
     && /bin/ollama run "$MODEL" "只回答OK" >/dev/null 2>&1
 }
 
-/bin/ollama serve >>"$OLLAMA_LOG_FILE" 2>&1 &
+OLLAMA_LOG_PIPE="/tmp/ollama-log.$$"
+rm -f "$OLLAMA_LOG_PIPE"
+mkfifo "$OLLAMA_LOG_PIPE"
+prefix_ollama_logs <"$OLLAMA_LOG_PIPE" &
+OLLAMA_LOGGER_PID="$!"
+
+/bin/ollama serve >"$OLLAMA_LOG_PIPE" 2>&1 &
 OLLAMA_PID="$!"
 
 until /bin/ollama list >/dev/null 2>&1; do
@@ -228,5 +240,5 @@ done
   fi
 ) &
 
-trap 'kill "$OLLAMA_PID" 2>/dev/null || true' INT TERM
+trap 'kill "$OLLAMA_PID" "$OLLAMA_LOGGER_PID" 2>/dev/null || true; rm -f "$OLLAMA_LOG_PIPE"' INT TERM
 exec "$@"
