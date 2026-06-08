@@ -10,7 +10,6 @@ from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
 
-import httpx
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
@@ -21,15 +20,12 @@ from app.common import env_float, log
 
 TTS_HOST = os.getenv("TTS_HOST", "0.0.0.0")
 TTS_PORT = int(os.getenv("TTS_PORT", "8093"))
-VOICE_TTS_FALLBACK_ENGINE = os.getenv("VOICE_TTS_FALLBACK_ENGINE", "melotts").strip().lower() or "melotts"
-VOICE_TTS_FALLBACK_MODEL = os.getenv("VOICE_TTS_FALLBACK_MODEL", "MeloTTS-Chinese").strip() or "MeloTTS-Chinese"
+LOCAL_TTS_ENGINE = "melotts"
+LOCAL_TTS_MODEL = "MeloTTS-Chinese"
 CONFIGURED_TTS_ENGINE = voice.VOICE_TTS_ENGINE
 CONFIGURED_TTS_MODEL = voice.VOICE_TTS_MODEL
 TTS_REACHABILITY_INTERVAL_SECONDS = env_float("TTS_REACHABILITY_INTERVAL_SECONDS")
 TTS_REACHABILITY_TIMEOUT_SECONDS = env_float("TTS_REACHABILITY_TIMEOUT_SECONDS")
-ONLINE_TTS_REACHABILITY_PATH = os.getenv("ONLINE_TTS_REACHABILITY_PATH", "/models").strip() or "/models"
-if not ONLINE_TTS_REACHABILITY_PATH.startswith("/"):
-    ONLINE_TTS_REACHABILITY_PATH = "/" + ONLINE_TTS_REACHABILITY_PATH
 
 
 @dataclass(frozen=True)
@@ -74,11 +70,20 @@ def online_enabled() -> bool:
 
 
 def local_engine() -> str:
-    return VOICE_TTS_FALLBACK_ENGINE if online_enabled() else CONFIGURED_TTS_ENGINE
+    return LOCAL_TTS_ENGINE if online_enabled() else CONFIGURED_TTS_ENGINE
 
 
 def local_model() -> str:
-    return VOICE_TTS_FALLBACK_MODEL if online_enabled() else CONFIGURED_TTS_MODEL
+    return LOCAL_TTS_MODEL if online_enabled() else CONFIGURED_TTS_MODEL
+
+
+def validate_tts_selection() -> None:
+    if CONFIGURED_TTS_ENGINE not in {"melotts", "online"}:
+        raise RuntimeError("VOICE_TTS_ENGINE must be melotts or online")
+    if online_enabled() and CONFIGURED_TTS_MODEL != "edge-tts":
+        raise RuntimeError("online TTS only supports VOICE_TTS_MODEL=edge-tts")
+    if local_model() != "MeloTTS-Chinese":
+        raise RuntimeError("local TTS only supports MeloTTS-Chinese")
 
 
 def with_tts_env(engine: str, model: str) -> None:
@@ -127,19 +132,17 @@ def synthesize_wav(tts_voice: voice.TextToSpeech, text: str) -> bytes:
 async def probe_online() -> Reachability:
     if not online_enabled():
         return Reachability(online=False, status="online_engine_disabled", checked_at=time.time())
-    if not voice.ONLINE_TTS_BASE_URL:
-        return Reachability(online=False, status="config_error:ONLINE_TTS_BASE_URL", checked_at=time.time())
-    if not voice.ONLINE_TTS_API_KEY:
-        return Reachability(online=False, status="config_error:ONLINE_TTS_API_KEY", checked_at=time.time())
     try:
-        async with httpx.AsyncClient(timeout=TTS_REACHABILITY_TIMEOUT_SECONDS) as client:
-            response = await client.get(
-                f"{voice.ONLINE_TTS_BASE_URL}{ONLINE_TTS_REACHABILITY_PATH}",
-                headers=voice.online_audio_headers(voice.ONLINE_TTS_API_KEY),
-            )
-            status = "ok" if response.is_success else f"http_{response.status_code}"
-            return Reachability(online=response.is_success, status=status, checked_at=time.time())
-    except httpx.HTTPError:
+        import edge_tts
+
+        await asyncio.wait_for(
+            edge_tts.list_voices(proxy=voice.EDGE_TTS_PROXY),
+            timeout=TTS_REACHABILITY_TIMEOUT_SECONDS,
+        )
+        return Reachability(online=True, status="ok", checked_at=time.time())
+    except asyncio.TimeoutError:
+        return Reachability(online=False, status="timeout", checked_at=time.time())
+    except Exception:
         return Reachability(online=False, status="unreachable", checked_at=time.time())
 
 
@@ -153,6 +156,7 @@ async def reachability_loop() -> None:
 
 async def startup() -> None:
     global LOCAL_VOICE, ONLINE_VOICE, ONLINE_REACHABILITY, ONLINE_REACHABILITY_TASK
+    validate_tts_selection()
     LOCAL_VOICE = create_local_voice()
     if online_enabled():
         ONLINE_VOICE = create_online_voice()

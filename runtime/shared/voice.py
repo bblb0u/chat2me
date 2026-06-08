@@ -101,17 +101,6 @@ ASR_NOISE_GATE_PERCENTILE = env_float("ASR_NOISE_GATE_PERCENTILE")
 ASR_NOISE_GATE_RATIO = env_float("ASR_NOISE_GATE_RATIO")
 ASR_NOISE_GATE_OFFSET = env_float("ASR_NOISE_GATE_OFFSET")
 ASR_PREROLL_SECONDS = env_float("ASR_PREROLL_SECONDS")
-SHERPA_TTS_THREADS = env_int("SHERPA_TTS_THREADS")
-SHERPA_TTS_PROVIDER = os.getenv("SHERPA_TTS_PROVIDER", "auto").strip().lower() or "auto"
-SHERPA_TTS_SPEED = env_float("SHERPA_TTS_SPEED")
-SHERPA_TTS_LENGTH_SCALE = env_float("SHERPA_TTS_LENGTH_SCALE")
-SHERPA_TTS_NOISE_SCALE = env_float("SHERPA_TTS_NOISE_SCALE")
-SHERPA_TTS_SILENCE_SCALE = env_float("SHERPA_TTS_SILENCE_SCALE")
-SHERPA_TTS_RULE_FSTS = tuple(
-    item.strip()
-    for item in os.getenv("SHERPA_TTS_RULE_FSTS", "").split(",")
-    if item.strip()
-)
 MELOTTS_LANGUAGE = os.getenv("MELOTTS_LANGUAGE", "ZH").strip() or "ZH"
 MELOTTS_SPEAKER = os.getenv("MELOTTS_SPEAKER", "ZH").strip() or "ZH"
 MELOTTS_SPEED = env_float("MELOTTS_SPEED")
@@ -136,17 +125,14 @@ VOICE_ASR_DEVICE = os.getenv("VOICE_ASR_DEVICE", "auto").strip().lower()
 VOICE_TTS_DEVICE = os.getenv("VOICE_TTS_DEVICE", "auto").strip().lower()
 MELOTTS_CONFIG_FILE = Path(os.getenv("MELOTTS_CONFIG_FILE", str(TTS_MODEL_DIR / "config.json")))
 MELOTTS_CKPT_FILE = Path(os.getenv("MELOTTS_CKPT_FILE", str(TTS_MODEL_DIR / "checkpoint.pth")))
-ONLINE_TTS_BASE_URL = os.getenv("ONLINE_TTS_BASE_URL", "").strip().rstrip("/")
-ONLINE_TTS_SPEECH_PATH = os.getenv("ONLINE_TTS_SPEECH_PATH", "/audio/speech").strip() or "/audio/speech"
-if not ONLINE_TTS_SPEECH_PATH.startswith("/"):
-    ONLINE_TTS_SPEECH_PATH = "/" + ONLINE_TTS_SPEECH_PATH
-ONLINE_TTS_API_KEY = (os.getenv("ONLINE_TTS_API_KEY") or os.getenv("LLM_API_KEY", "")).strip()
-ONLINE_TTS_VOICE = os.getenv("ONLINE_TTS_VOICE", "alloy").strip() or "alloy"
-ONLINE_TTS_INSTRUCTIONS = os.getenv("ONLINE_TTS_INSTRUCTIONS", "").strip()
-ONLINE_TTS_RESPONSE_FORMAT = os.getenv("ONLINE_TTS_RESPONSE_FORMAT", "pcm").strip() or "pcm"
-ONLINE_TTS_SPEED = env_float("ONLINE_TTS_SPEED")
-ONLINE_TTS_SAMPLE_RATE = env_int("ONLINE_TTS_SAMPLE_RATE")
-ONLINE_TTS_TIMEOUT_SECONDS = env_float("ONLINE_TTS_TIMEOUT_SECONDS")
+EDGE_TTS_VOICE = env_value("EDGE_TTS_VOICE")
+EDGE_TTS_RATE = env_value("EDGE_TTS_RATE")
+EDGE_TTS_VOLUME = env_value("EDGE_TTS_VOLUME")
+EDGE_TTS_PITCH = env_value("EDGE_TTS_PITCH")
+EDGE_TTS_PROXY = env_value("EDGE_TTS_PROXY", allow_empty=True) or None
+EDGE_TTS_SAMPLE_RATE = env_int("EDGE_TTS_SAMPLE_RATE")
+EDGE_TTS_CONNECT_TIMEOUT_SECONDS = env_int("EDGE_TTS_CONNECT_TIMEOUT_SECONDS")
+EDGE_TTS_RECEIVE_TIMEOUT_SECONDS = env_int("EDGE_TTS_RECEIVE_TIMEOUT_SECONDS")
 DISPLAY_TEXT_MAX_CHARS = env_int("DISPLAY_TEXT_MAX_CHARS")
 DISPLAY_SERIAL_RETRY_SECONDS = env_float("DISPLAY_SERIAL_RETRY_SECONDS")
 WAKE_RESPONSE = env_value("WAKE_RESPONSE")
@@ -472,19 +458,6 @@ class RemoteBatchRecognizer:
         return bool(stream.get("endpoint", False))
 
 
-def online_audio_headers(api_key: str) -> dict[str, str]:
-    headers: dict[str, str] = {}
-    if api_key:
-        headers["Authorization"] = f"Bearer {api_key}"
-    return headers
-
-
-def online_tts_url() -> str:
-    if not ONLINE_TTS_BASE_URL:
-        raise RuntimeError("ONLINE_TTS_BASE_URL must be set when VOICE_TTS_ENGINE=online")
-    return f"{ONLINE_TTS_BASE_URL}{ONLINE_TTS_SPEECH_PATH}"
-
-
 def float_audio_to_wav_bytes(samples: np.ndarray, sample_rate: int) -> bytes:
     clipped = np.clip(np.asarray(samples, dtype=np.float32).reshape(-1), -1.0, 1.0)
     pcm = (clipped * 32767.0).astype(np.int16).tobytes()
@@ -601,17 +574,6 @@ def play_wav(path: Path) -> None:
         log(f"aplay is unavailable: {exc}")
 
 
-class SherpaTTS:
-    def __init__(self, tts: Any) -> None:
-        self.tts = tts
-        sample_rate = int(getattr(tts, "sample_rate", 16000) or 16000)
-        self.config = SimpleNamespace(sample_rate=sample_rate)
-
-    def synthesize_pcm(self, text: str) -> Iterable[bytes]:
-        audio = self.tts.generate(text, sid=0, speed=SHERPA_TTS_SPEED)
-        yield tensor_audio_bytes(audio.samples)
-
-
 class MeloTextToSpeech:
     def __init__(self, model: Any, speaker_id: int, sample_rate: int) -> None:
         self.model = model
@@ -637,13 +599,13 @@ class MeloTextToSpeech:
         yield tensor_audio_bytes(audio)
 
 
-class OnlineTextToSpeech:
+class EdgeTextToSpeech:
     def __init__(self) -> None:
-        self.config = SimpleNamespace(sample_rate=ONLINE_TTS_SAMPLE_RATE)
+        self.config = SimpleNamespace(sample_rate=EDGE_TTS_SAMPLE_RATE)
 
     def synthesize_pcm(self, text: str) -> Iterable[bytes]:
-        audio = synthesize_online_audio(text)
-        yield decode_online_tts_audio(audio, ONLINE_TTS_RESPONSE_FORMAT, ONLINE_TTS_SAMPLE_RATE)
+        audio = synthesize_edge_tts_audio(text)
+        yield decode_audio_to_pcm(audio, EDGE_TTS_SAMPLE_RATE)
 
 
 class RemoteTextToSpeech:
@@ -698,74 +660,6 @@ class CachedTextToSpeech:
         if text and text not in self.cache:
             for _ in self.synthesize_pcm(text):
                 pass
-
-
-def create_sherpa_tts() -> TextToSpeech:
-    import sherpa_onnx
-
-    if VOICE_TTS_MODEL != "matcha-icefall-zh-en":
-        raise RuntimeError("use sherpa TTS model matcha-icefall-zh-en")
-
-    acoustic_model = TTS_MODEL_DIR / "model-steps-3.onnx"
-    vocoder = TTS_MODEL_DIR / "vocos-16khz-univ.onnx"
-    tokens = TTS_MODEL_DIR / "tokens.txt"
-    lexicon = TTS_MODEL_DIR / "lexicon.txt"
-    data_dir = TTS_MODEL_DIR / "espeak-ng-data"
-    require_file(acoustic_model)
-    require_file(vocoder)
-    require_file(tokens)
-    require_file(lexicon)
-    if not data_dir.is_dir():
-        raise FileNotFoundError(f"missing required directory: {data_dir}")
-    rule_fsts = []
-    for name in SHERPA_TTS_RULE_FSTS:
-        path = TTS_MODEL_DIR / name
-        require_file(path)
-        rule_fsts.append(str(path))
-
-    log(
-        "Sherpa TTS config: "
-        f"model={TTS_MODEL_DIR} provider={SHERPA_TTS_PROVIDER} threads={SHERPA_TTS_THREADS} "
-        f"speed={SHERPA_TTS_SPEED} length_scale={SHERPA_TTS_LENGTH_SCALE} "
-        f"noise_scale={SHERPA_TTS_NOISE_SCALE}"
-    )
-    started = time.monotonic()
-    matcha = sherpa_onnx.OfflineTtsMatchaModelConfig(
-        acoustic_model=str(acoustic_model),
-        vocoder=str(vocoder),
-        tokens=str(tokens),
-        lexicon=str(lexicon),
-        data_dir=str(data_dir),
-        length_scale=SHERPA_TTS_LENGTH_SCALE,
-        noise_scale=SHERPA_TTS_NOISE_SCALE,
-    )
-
-    def build(provider: str) -> Any:
-        model_config = sherpa_onnx.OfflineTtsModelConfig(
-            matcha=matcha,
-            num_threads=SHERPA_TTS_THREADS,
-            provider=provider,
-        )
-        config = sherpa_onnx.OfflineTtsConfig(
-            model=model_config,
-            rule_fsts=",".join(rule_fsts),
-            max_num_sentences=1,
-            silence_scale=SHERPA_TTS_SILENCE_SCALE,
-        )
-        return sherpa_onnx.OfflineTts(config)
-
-    tts, provider = create_with_sherpa_provider(
-        "Sherpa TTS",
-        "SHERPA_TTS_PROVIDER",
-        SHERPA_TTS_PROVIDER,
-        build,
-    )
-    log(
-        "Sherpa TTS loaded: "
-        f"provider={provider} requested={SHERPA_TTS_PROVIDER} "
-        f"sample_rate={tts.sample_rate} elapsed={time.monotonic() - started:.2f}s"
-    )
-    return SherpaTTS(tts)
 
 
 def resolve_torch_device(requested: str) -> str:
@@ -845,10 +739,8 @@ def create_melotts_tts() -> TextToSpeech:
 def create_tts() -> tuple[TextToSpeech, None]:
     if VOICE_TTS_ENGINE == "melotts":
         return wrap_tts(create_melotts_tts()), None
-    if VOICE_TTS_ENGINE == "sherpa":
-        return wrap_tts(create_sherpa_tts()), None
     if VOICE_TTS_ENGINE == "online":
-        return wrap_tts(create_online_tts()), None
+        return wrap_tts(create_edge_tts()), None
     raise RuntimeError(f"VOICE_TTS_ENGINE '{VOICE_TTS_ENGINE}' is not supported")
 
 
@@ -885,25 +777,26 @@ def warmup_tts(voice: TextToSpeech) -> None:
         )
 
 
-def synthesize_online_audio(text: str) -> bytes:
-    payload: dict[str, Any] = {
-        "model": VOICE_TTS_MODEL,
-        "input": text,
-        "voice": ONLINE_TTS_VOICE,
-        "response_format": ONLINE_TTS_RESPONSE_FORMAT,
-        "speed": ONLINE_TTS_SPEED,
-    }
-    if ONLINE_TTS_INSTRUCTIONS:
-        payload["instructions"] = ONLINE_TTS_INSTRUCTIONS
-    timeout = httpx.Timeout(connect=5.0, read=ONLINE_TTS_TIMEOUT_SECONDS, write=15.0, pool=5.0)
-    with httpx.Client(timeout=timeout) as client:
-        response = client.post(
-            online_tts_url(),
-            headers={"Content-Type": "application/json", **online_audio_headers(ONLINE_TTS_API_KEY)},
-            json=payload,
-        )
-        response.raise_for_status()
-    return response.content
+def synthesize_edge_tts_audio(text: str) -> bytes:
+    import edge_tts
+
+    communicate = edge_tts.Communicate(
+        text,
+        EDGE_TTS_VOICE,
+        rate=EDGE_TTS_RATE,
+        volume=EDGE_TTS_VOLUME,
+        pitch=EDGE_TTS_PITCH,
+        proxy=EDGE_TTS_PROXY,
+        connect_timeout=EDGE_TTS_CONNECT_TIMEOUT_SECONDS,
+        receive_timeout=EDGE_TTS_RECEIVE_TIMEOUT_SECONDS,
+    )
+    chunks: list[bytes] = []
+    for message in communicate.stream_sync():
+        if message.get("type") == "audio":
+            chunks.append(bytes(message.get("data") or b""))
+    if not chunks:
+        raise RuntimeError("EdgeTTS returned no audio")
+    return b"".join(chunks)
 
 
 def synthesize_remote_wav(text: str) -> bytes:
@@ -911,7 +804,8 @@ def synthesize_remote_wav(text: str) -> bytes:
         "text": text,
         "online_available": cached_online_available(TTS_ROUTE_CACHE, TTS_ROUTE_CACHE_LOCK),
     }
-    timeout = httpx.Timeout(connect=5.0, read=ONLINE_TTS_TIMEOUT_SECONDS + 10, write=15.0, pool=5.0)
+    read_timeout = max(float(EDGE_TTS_RECEIVE_TIMEOUT_SECONDS), TTS_PLAYER_TIMEOUT_SECONDS) + 10
+    timeout = httpx.Timeout(connect=5.0, read=read_timeout, write=15.0, pool=5.0)
     with httpx.Client(timeout=timeout) as client:
         response = client.post(TTS_SERVICE_URL, json=payload)
         response.raise_for_status()
@@ -938,9 +832,7 @@ def wav_bytes_to_pcm(wav_bytes: bytes) -> tuple[bytes, int]:
     return mono_samples.tobytes(), int(sample_rate)
 
 
-def decode_online_tts_audio(audio: bytes, response_format: str, sample_rate: int) -> bytes:
-    if response_format == "pcm":
-        return audio
+def decode_audio_to_pcm(audio: bytes, sample_rate: int) -> bytes:
     command = [
         "ffmpeg",
         "-hide_banner",
@@ -959,17 +851,19 @@ def decode_online_tts_audio(audio: bytes, response_format: str, sample_rate: int
     result = subprocess.run(command, input=audio, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
     if result.returncode != 0:
         detail = result.stderr.decode("utf-8", errors="replace").strip()
-        raise RuntimeError(f"online TTS audio decode failed: {detail}")
+        raise RuntimeError(f"TTS audio decode failed: {detail}")
     return result.stdout
 
 
-def create_online_tts() -> TextToSpeech:
+def create_edge_tts() -> TextToSpeech:
+    if VOICE_TTS_MODEL != "edge-tts":
+        raise RuntimeError("online TTS only supports VOICE_TTS_MODEL=edge-tts")
     log(
-        "Online TTS config: "
-        f"url={online_tts_url()} model={VOICE_TTS_MODEL} voice={ONLINE_TTS_VOICE} "
-        f"format={ONLINE_TTS_RESPONSE_FORMAT} sample_rate={ONLINE_TTS_SAMPLE_RATE}"
+        "EdgeTTS config: "
+        f"model={VOICE_TTS_MODEL} voice={EDGE_TTS_VOICE} rate={EDGE_TTS_RATE} "
+        f"volume={EDGE_TTS_VOLUME} pitch={EDGE_TTS_PITCH} sample_rate={EDGE_TTS_SAMPLE_RATE}"
     )
-    return OnlineTextToSpeech()
+    return EdgeTextToSpeech()
 
 
 def tensor_audio_bytes(audio: Any) -> bytes:

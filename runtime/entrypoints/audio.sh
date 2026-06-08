@@ -197,24 +197,17 @@ resolve_tts_model() {
           ;;
       esac
       ;;
-    sherpa)
-      VOICE_TTS_MODEL="${VOICE_TTS_MODEL:-matcha-icefall-zh-en}"
+    online)
+      VOICE_TTS_MODEL="${VOICE_TTS_MODEL:-edge-tts}"
       case "$VOICE_TTS_MODEL" in
-        matcha-icefall-zh-en)
-          SHERPA_TTS_MODEL_URL="https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/matcha-icefall-zh-en.tar.bz2"
-          SHERPA_TTS_VOCODER_URL="https://github.com/k2-fsa/sherpa-onnx/releases/download/vocoder-models/vocos-16khz-univ.onnx"
-          SHERPA_TTS_REQUIRED_FILES="model-steps-3.onnx,vocos-16khz-univ.onnx,tokens.txt,lexicon.txt,phone-zh.fst,date-zh.fst,number-zh.fst"
-          ;;
+        edge-tts) ;;
         *)
-          known_value_error "VOICE_TTS_MODEL" "$VOICE_TTS_MODEL" "matcha-icefall-zh-en"
+          known_value_error "VOICE_TTS_MODEL" "$VOICE_TTS_MODEL" "edge-tts"
           ;;
       esac
       ;;
-    online)
-      VOICE_TTS_MODEL="${VOICE_TTS_MODEL:-gpt-4o-mini-tts}"
-      ;;
     *)
-      known_value_error "VOICE_TTS_ENGINE" "$VOICE_TTS_ENGINE" "melotts, sherpa, online"
+      known_value_error "VOICE_TTS_ENGINE" "$VOICE_TTS_ENGINE" "melotts, online"
       ;;
   esac
 }
@@ -434,16 +427,6 @@ asr_model_ok() {
     && asr_runtime_ok
 }
 
-sherpa_tts_runtime_ok() {
-  python_module_ok sherpa_onnx
-}
-
-sherpa_tts_model_ok() {
-  required_relative_files_ok "$TTS_MODEL_DIR" "$SHERPA_TTS_REQUIRED_FILES" \
-    && [ -d "$TTS_MODEL_DIR/espeak-ng-data" ] \
-    && sherpa_tts_runtime_ok
-}
-
 melotts_runtime_ok() {
   python_module_ok torch \
     && python_module_ok melo.api \
@@ -563,13 +546,6 @@ ensure_sherpa_asr_runtime() {
   esac
 }
 
-ensure_sherpa_tts_runtime() {
-  if sherpa_tts_runtime_ok; then
-    return
-  fi
-  missing_image_dependency "Sherpa ONNX TTS runtime"
-}
-
 ensure_melotts_runtime() {
   if melotts_runtime_ok; then
     return
@@ -578,11 +554,8 @@ ensure_melotts_runtime() {
 }
 
 ensure_online_tts_runtime() {
-  require_python_module httpx
-  case "$(normalize_key "${ONLINE_TTS_RESPONSE_FORMAT:-pcm}")" in
-    pcm) ;;
-    *) require_command ffmpeg ;;
-  esac
+  require_python_module edge_tts
+  require_command ffmpeg
 }
 
 ensure_selected_runtimes() {
@@ -599,14 +572,10 @@ ensure_selected_runtimes() {
   if model_selected speech || model_selected tts-service; then
     case "$VOICE_TTS_ENGINE" in
       melotts) ensure_melotts_runtime ;;
-      sherpa) ensure_sherpa_tts_runtime ;;
       online) ensure_online_tts_runtime ;;
     esac
     if [ "$VOICE_TTS_ENGINE" = "online" ]; then
-      case "${VOICE_TTS_FALLBACK_ENGINE:-melotts}" in
-        melotts) ensure_melotts_runtime ;;
-        sherpa) ensure_sherpa_tts_runtime ;;
-      esac
+      ensure_melotts_runtime
     fi
   fi
 }
@@ -834,23 +803,6 @@ ensure_hf_snapshot_model() {
   fi
 }
 
-ensure_sherpa_tts_model() {
-  if sherpa_tts_model_ok; then
-    echo "sherpa $VOICE_TTS_MODEL is ready"
-    return
-  fi
-
-  echo "sherpa $VOICE_TTS_MODEL is missing or invalid; re-downloading"
-  download_and_extract "$VOICE_TTS_MODEL" "$SHERPA_TTS_MODEL_URL" "$TTS_MODEL_DIR"
-  download_with_progress "$TTS_MODEL_DIR/vocos-16khz-univ.onnx" "$SHERPA_TTS_VOCODER_URL" "vocos-16khz-univ.onnx"
-
-  echo "[models] validating sherpa $VOICE_TTS_MODEL"
-  if ! sherpa_tts_model_ok; then
-    echo "sherpa $VOICE_TTS_MODEL is still invalid after download" >&2
-    exit 1
-  fi
-}
-
 ensure_melotts_model() {
   ensure_hf_snapshot_model \
     "$VOICE_TTS_MODEL" \
@@ -892,8 +844,8 @@ prepare_asr_download_target() {
 
 prepare_tts_download_target() {
   if [ "$ORIGINAL_VOICE_TTS_ENGINE" = "online" ]; then
-    VOICE_TTS_ENGINE="${VOICE_TTS_FALLBACK_ENGINE:-melotts}"
-    VOICE_TTS_MODEL="${VOICE_TTS_FALLBACK_MODEL:-MeloTTS-Chinese}"
+    VOICE_TTS_ENGINE="melotts"
+    VOICE_TTS_MODEL="MeloTTS-Chinese"
   else
     VOICE_TTS_ENGINE="$ORIGINAL_VOICE_TTS_ENGINE"
     VOICE_TTS_MODEL="$ORIGINAL_VOICE_TTS_MODEL"
@@ -926,17 +878,10 @@ fi
 if model_selected speech || model_selected tts-service; then
   case "$VOICE_TTS_ENGINE" in
     melotts) MODEL_SET="$MODEL_SET,melotts" ;;
-    sherpa) MODEL_SET="$MODEL_SET,sherpa-tts" ;;
     online) ;;
   esac
   if [ "$VOICE_TTS_ENGINE" = "online" ]; then
-    VOICE_TTS_FALLBACK_ENGINE="${VOICE_TTS_FALLBACK_ENGINE:-melotts}"
-    VOICE_TTS_FALLBACK_MODEL="${VOICE_TTS_FALLBACK_MODEL:-MeloTTS-Chinese}"
-    case "$VOICE_TTS_FALLBACK_ENGINE" in
-      melotts) MODEL_SET="$MODEL_SET,melotts" ;;
-      sherpa) MODEL_SET="$MODEL_SET,sherpa-tts" ;;
-      *) echo "VOICE_TTS_FALLBACK_ENGINE '$VOICE_TTS_FALLBACK_ENGINE' is not supported" >&2; exit 1 ;;
-    esac
+    MODEL_SET="$MODEL_SET,melotts"
   fi
 fi
 : "${LOCK_WAIT_LOG_SECONDS:?LOCK_WAIT_LOG_SECONDS must be set in runtime.env}"
@@ -999,11 +944,6 @@ if model_selected asr; then
     "$ASR_MODEL_URL" \
     asr_model_ok \
     "$ASR_MODEL"
-fi
-
-if model_selected sherpa-tts; then
-  prepare_tts_download_target
-  ensure_sherpa_tts_model
 fi
 
 if model_selected melotts; then

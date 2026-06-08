@@ -2,7 +2,7 @@
 
 Chat2Me 是一套跑在机器人硬件上的中文语音交互系统，不是面向浏览器的通用聊天 Demo。当前默认平台是 NVIDIA Jetson / ARM64，典型外设包括 ReSpeaker 麦克风阵列、ALSA 扬声器和 ESP32-S3 触摸屏。
 
-系统把唤醒词、语音识别、对话编排、LLM、语音合成、声源方向和外设状态同步拆成独立模块，通过 Docker Compose 组合运行。LLM 镜像内置 Ollama；ASR、TTS、Speech、Relay 分别构建独立镜像；ASR 固定使用本地 Sherpa ONNX，LLM/TTS 可以按配置切到 OpenAI-compatible 在线服务，TTS 在线不可用时回落到本地模型。
+系统把唤醒词、语音识别、对话编排、LLM、语音合成、声源方向和外设状态同步拆成独立模块，通过 Docker Compose 组合运行。LLM 镜像内置 Ollama；ASR、TTS、Speech、Relay 分别构建独立镜像；ASR 固定使用本地 Sherpa ONNX，LLM 可以按配置切到 OpenAI-compatible 在线服务，TTS 支持本地 MeloTTS 或在线 EdgeTTS，在线不可用时回落到本地模型。
 
 ## 硬件和平台
 
@@ -62,9 +62,9 @@ Compose 中实际运行 6 个容器：
 - 后端语言：Python 3.11、Python 3.8/Ubuntu 20.04 ASR/TTS/Speech 镜像运行环境。
 - Web/API：FastAPI、Uvicorn、Pydantic、httpx；语音主循环和状态服务使用 `http.server`。
 - 本地 LLM：Ollama，默认 `qwen3:4b-instruct`。
-- 在线模型接口：OpenAI-compatible `/chat/completions` 或 `/responses`，在线 TTS `/audio/speech`。
+- 在线模型接口：OpenAI-compatible `/chat/completions` 或 `/responses`。
 - ASR：Sherpa ONNX streaming ASR。
-- TTS：官方 MeloTTS、Sherpa ONNX Matcha、在线 TTS。
+- TTS：官方 MeloTTS、在线 EdgeTTS。
 - 音频：sounddevice、ALSA `aplay`、ffmpeg、PyUSB、ReSpeaker USB tuning/DOA。
 - 容器：Docker Compose、Docker Hub ARM64 镜像、GitHub Actions Buildx 发布。
 - 固件：ESP-IDF 5.5.x、C/C++、LVGL、ST7796 LCD、FT6336 Touch、AXP2101 PMU。
@@ -155,20 +155,20 @@ VOICE_KWS_PROVIDER=auto
 MELOTTS_LANGUAGE=ZH
 MELOTTS_SPEAKER=ZH
 MELOTTS_DISABLE_BERT=1
-SHERPA_TTS_PROVIDER=auto
 ```
 
-GPU 相关默认值使用 `auto`：运行时先尝试 CUDA/GPU，当前镜像或宿主机不可用时才回落 CPU。显式配置 `cuda` 或 `gpu` 时不会回落，CUDA 不可用会直接启动失败；需要禁止 CPU 回落时就使用显式配置。Sherpa ONNX 的 KWS/ASR/TTS provider 使用 `auto/cpu/cuda/gpu`；MeloTTS 使用 PyTorch device，支持 `auto/cpu/cuda/gpu/cuda:<index>`。
+GPU 相关默认值使用 `auto`：运行时先尝试 CUDA/GPU，当前镜像或宿主机不可用时才回落 CPU。显式配置 `cuda` 或 `gpu` 时不会回落，CUDA 不可用会直接启动失败；需要禁止 CPU 回落时就使用显式配置。Sherpa ONNX 的 KWS/ASR provider 使用 `auto/cpu/cuda/gpu`；MeloTTS 使用 PyTorch device，支持 `auto/cpu/cuda/gpu/cuda:<index>`。
 
 在线 TTS，失败回落本地：
 
 ```env
 VOICE_TTS_ENGINE=online
-VOICE_TTS_MODEL=gpt-4o-mini-tts
-VOICE_TTS_FALLBACK_ENGINE=melotts
-VOICE_TTS_FALLBACK_MODEL=MeloTTS-Chinese
-ONLINE_TTS_BASE_URL=https://api.openai.com/v1
-ONLINE_TTS_API_KEY=sk-...
+VOICE_TTS_MODEL=edge-tts
+EDGE_TTS_VOICE=zh-CN-XiaoxiaoNeural
+EDGE_TTS_RATE=+0%
+EDGE_TTS_VOLUME=+0%
+EDGE_TTS_PITCH=+0Hz
+EDGE_TTS_PROXY=
 ```
 
 ASR 不再支持在线路由，`VOICE_ASR_ENGINE` 只支持 `sherpa`。
@@ -212,7 +212,7 @@ ASR 不再支持在线路由，`VOICE_ASR_ENGINE` 只支持 `sherpa`。
 - `chat2me-asr` 启动时只创建本地 Sherpa ONNX 识别实例。
 - `chat2me-tts` 启动时创建本地 TTS；配置 `VOICE_TTS_ENGINE=online` 时也创建在线实例并后台探活。
 - TTS 请求会优先使用调用方传入的 `online_available` 缓存值，避免每次请求阻塞探活。
-- 在线 TTS 请求失败会自动使用本地 fallback engine/model。
+- 在线 TTS 请求失败会自动回落到本地 `melotts/MeloTTS-Chinese`。
 - ASR 输入是 16-bit PCM WAV；TTS 输出是 `audio/wav`。
 
 `chat2me-relay` 不是语音主链路的一部分。它把 `chat2me-speech /state` 暴露出来的交互状态转成外设可消费的消息，当前默认写给 ESP32-S3 屏幕固件，也可以扩展成灯光、舵机、触摸板、上位机状态同步或其他机器人交互通道。
@@ -368,7 +368,6 @@ PY
 | `runtime/deps/speech/kws.sh` | 安装唤醒词 KWS 模型所需 Sherpa ONNX runtime。 |
 | `runtime/deps/asr/sherpa.sh` | 安装 Sherpa ASR 模型所需 Sherpa ONNX runtime。 |
 | `runtime/deps/tts/melotts.sh` | 安装官方 MeloTTS 框架及 Jetson GPU/Torch 依赖。 |
-| `runtime/deps/tts/sherpa.sh` | 安装 Sherpa TTS 模型所需 Sherpa ONNX runtime。 |
 
 ### firmware/display
 
@@ -406,8 +405,7 @@ ASR：
 TTS：
 
 - `melotts`：`MeloTTS-Chinese`
-- `sherpa`：`matcha-icefall-zh-en`
-- `online`：OpenAI-compatible `/audio/speech`
+- `online`：`edge-tts`
 
 LLM：
 

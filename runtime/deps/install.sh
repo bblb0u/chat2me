@@ -23,9 +23,6 @@ for feature in $features; do
     tts-melotts)
       /opt/chat2me-deps/tts/melotts.sh
       ;;
-    tts-sherpa)
-      /opt/chat2me-deps/tts/sherpa.sh
-      ;;
     none)
       ;;
     *)
