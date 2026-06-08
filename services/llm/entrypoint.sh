@@ -37,8 +37,7 @@ chat2me_log() {
   message="$2"
   file_level="$(normalize_log_level "${CHAT2ME_LOG_LEVEL:-$(runtime_env_value CHAT2ME_LOG_LEVEL || true)}" info)"
   console_level="$(normalize_log_level "${CHAT2ME_CONSOLE_LOG_LEVEL:-$(runtime_env_value CHAT2ME_CONSOLE_LOG_LEVEL || true)}" warning)"
-  log_dir="${CHAT2ME_LOG_DIR:-$(runtime_env_value CHAT2ME_LOG_DIR || true)}"
-  log_dir="${log_dir:-/app/log}"
+  log_dir="/app/log"
   level_value="$(log_level_value "$level")"
   timestamp="$(date '+%Y-%m-%dT%H:%M:%S%z')"
 
@@ -183,8 +182,7 @@ print_ollama_log_tail() {
 
 init_config
 load_runtime_env
-CHAT2ME_LOG_DIR="${CHAT2ME_LOG_DIR:-/app/log}"
-OLLAMA_LOG_FILE="${OLLAMA_LOG_FILE:-$CHAT2ME_LOG_DIR/$VOICE_ROLE.ollama.log}"
+OLLAMA_LOG_FILE="/app/log/$VOICE_ROLE.ollama.log"
 mkdir -p "$(dirname "$OLLAMA_LOG_FILE")"
 : "${OLLAMA_MODEL:?OLLAMA_MODEL must be set in runtime.env}"
 MODEL="$OLLAMA_MODEL"

@@ -62,16 +62,13 @@ def env_csv(key: str) -> tuple[str, ...]:
     return tuple(item.strip() for item in env_value(key).split(",") if item.strip())
 
 
-CORE_LLM_URL = os.getenv("CORE_LLM_URL", "http://chat2me-llm:8082/chat")
-CORE_LLM_REACHABILITY_URL = os.getenv(
-    "CORE_LLM_REACHABILITY_URL",
-    CORE_LLM_URL.rsplit("/", 1)[0] + "/llm/reachability",
-)
-CORE_LLM_HEALTH_URL = os.getenv("CORE_LLM_HEALTH_URL", CORE_LLM_URL.rsplit("/", 1)[0] + "/health")
-CORE_LLM_TIMEOUT_SECONDS = env_float("CORE_LLM_TIMEOUT_SECONDS", "180")
-CORE_LLM_REACHABILITY_TIMEOUT_SECONDS = env_float("CORE_LLM_REACHABILITY_TIMEOUT_SECONDS", "2")
+CORE_LLM_URL = "http://chat2me-llm:8082/chat"
+CORE_LLM_REACHABILITY_URL = "http://chat2me-llm:8082/llm/reachability"
+CORE_LLM_HEALTH_URL = "http://chat2me-llm:8082/health"
+CORE_LLM_TIMEOUT_SECONDS = 180.0
+CORE_LLM_REACHABILITY_TIMEOUT_SECONDS = 2.0
 EMPTY_ANSWER_RESPONSE = env_value("EMPTY_ANSWER_RESPONSE")
-SPEECH_STATE_URL = os.getenv("SPEECH_STATE_URL", "http://chat2me-speech:8090/state")
+SPEECH_STATE_URL = "http://chat2me-speech:8090/state"
 WAKE_WORDS = env_csv("WAKE_WORDS")
 PROFILE_PATH = Path(os.getenv("PROFILE_PATH", "/app/config/profile.yaml"))
 SAFETY_PATH = Path(os.getenv("SAFETY_PATH", "/app/config/safety.yaml"))

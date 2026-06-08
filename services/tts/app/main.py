@@ -15,7 +15,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 from app import voice
-from app.common import env_float, log
+from app.common import log
 
 
 TTS_HOST = os.getenv("TTS_HOST", "0.0.0.0")
@@ -24,8 +24,8 @@ LOCAL_TTS_ENGINE = "melotts"
 LOCAL_TTS_MODEL = "MeloTTS-Chinese"
 CONFIGURED_TTS_ENGINE = voice.VOICE_TTS_ENGINE
 CONFIGURED_TTS_MODEL = voice.VOICE_TTS_MODEL
-TTS_REACHABILITY_INTERVAL_SECONDS = env_float("TTS_REACHABILITY_INTERVAL_SECONDS")
-TTS_REACHABILITY_TIMEOUT_SECONDS = env_float("TTS_REACHABILITY_TIMEOUT_SECONDS")
+TTS_REACHABILITY_INTERVAL_SECONDS = 5.0
+TTS_REACHABILITY_TIMEOUT_SECONDS = 5.0
 
 
 @dataclass(frozen=True)

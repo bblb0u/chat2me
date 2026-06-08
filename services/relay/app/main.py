@@ -24,7 +24,7 @@ DISPLAY_TEXT_MAX_CHARS = env_int("DISPLAY_TEXT_MAX_CHARS")
 DISPLAY_SERIAL_RETRY_SECONDS = env_float("DISPLAY_SERIAL_RETRY_SECONDS")
 RELAY_HOST = os.getenv("RELAY_HOST", "0.0.0.0")
 RELAY_PORT = int(os.getenv("RELAY_PORT", "8091"))
-RELAY_SOURCE_URL = os.getenv("RELAY_SOURCE_URL", "http://chat2me-speech:8090/state")
+RELAY_SOURCE_URL = "http://chat2me-speech:8090/state"
 RELAY_POLL_SECONDS = float(os.getenv("RELAY_POLL_SECONDS", "0.2").strip() or "0.2")
 RELAY_SOURCE_TIMEOUT_SECONDS = float(os.getenv("RELAY_SOURCE_TIMEOUT_SECONDS", "1.0").strip() or "1.0")
 

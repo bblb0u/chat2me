@@ -128,10 +128,9 @@ docker compose down
 ```env
 CHAT2ME_LOG_LEVEL=info
 CHAT2ME_CONSOLE_LOG_LEVEL=warning
-CHAT2ME_LOG_DIR=/app/log
 ```
 
-支持 `error`、`warning`、`info`、`debug` 四档。默认把 `info` 及以上写入 `data/log/<镜像名>.log`，Docker 控制台只显示 `warning/error`；模型下载和校验进度仍会直接输出到 `docker compose logs`，方便冷启动观察。
+支持 `error`、`warning`、`info`、`debug` 四档。默认把 `info` 及以上写入容器内固定目录 `/app/log`，由 compose 映射到 `data/log/chat2me-tts.log`、`data/log/chat2me-core.log` 这类固定服务日志；Docker 控制台只显示 `warning/error`。模型下载和校验进度仍会直接输出到 `docker compose logs`，方便冷启动观察。
 
 常用 LLM 配置：
 
@@ -403,7 +402,7 @@ PY
 | `data/config/*` | 当前机器实际生效的配置。 |
 | `data/models/*` | 已下载模型和运行时生成文件。 |
 | `data/ollama/*` | Ollama 模型、缓存和密钥。 |
-| `data/log/*` | 服务日志文件，默认每个镜像一个 `.log`。 |
+| `data/log/*` | 服务日志文件，默认按服务名写入 `chat2me-*.log`。 |
 
 ## 支持的模型
 

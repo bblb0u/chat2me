@@ -13,7 +13,6 @@ services:
       OLLAMA_LLM_LIBRARY: cuda_jetpack5
       JETSON_JETPACK: "5"
       LD_LIBRARY_PATH: /usr/lib/ollama:/usr/lib/ollama/cuda_jetpack5:/usr/local/nvidia/lib:/usr/local/nvidia/lib64
-      OLLAMA_BASE_URL: http://127.0.0.1:11434
     volumes:
       - ./data/config:/app/config
       - ./data/log:/app/log
@@ -57,7 +56,6 @@ services:
       - ./data/log:/app/log
     environment:
       VOICE_ROLE: chat2me-relay
-      RELAY_SOURCE_URL: http://chat2me-speech:8090/state
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8091/health"]
       interval: 30s

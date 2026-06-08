@@ -49,18 +49,14 @@ WAKE_WORDS = tuple(
 if not WAKE_WORDS:
     raise RuntimeError("WAKE_WORDS must contain at least one wake word in runtime.env")
 
-CORE_URL = os.getenv("CORE_URL") or os.getenv("GATEWAY_URL", "http://chat2me-core:8080/chat")
-CORE_REACHABILITY_URL = (
-    os.getenv("CORE_REACHABILITY_URL")
-    or os.getenv("GATEWAY_REACHABILITY_URL")
-    or CORE_URL.rsplit("/", 1)[0] + "/llm/reachability"
-)
-ASR_SERVICE_URL = os.getenv("ASR_SERVICE_URL", "http://chat2me-asr:8092/asr/transcribe")
-TTS_SERVICE_URL = os.getenv("TTS_SERVICE_URL", "http://chat2me-tts:8093/tts/speak")
-TTS_REACHABILITY_URL = os.getenv("TTS_REACHABILITY_URL", TTS_SERVICE_URL.rsplit("/", 1)[0] + "/reachability")
+CORE_URL = "http://chat2me-core:8080/chat"
+CORE_REACHABILITY_URL = "http://chat2me-core:8080/llm/reachability"
+ASR_SERVICE_URL = "http://chat2me-asr:8092/asr/transcribe"
+TTS_SERVICE_URL = "http://chat2me-tts:8093/tts/speak"
+TTS_REACHABILITY_URL = "http://chat2me-tts:8093/tts/reachability"
 NETWORK_UNAVAILABLE_RESPONSE = env_value("NETWORK_UNAVAILABLE_RESPONSE")
-LLM_ROUTE_CACHE_INTERVAL_SECONDS = env_float("LLM_ROUTE_CACHE_INTERVAL_SECONDS")
-TTS_ROUTE_CACHE_INTERVAL_SECONDS = env_float("TTS_ROUTE_CACHE_INTERVAL_SECONDS")
+LLM_ROUTE_CACHE_INTERVAL_SECONDS = 2.0
+TTS_ROUTE_CACHE_INTERVAL_SECONDS = 2.0
 DISPLAY_SERIAL_BAUD = env_int("DISPLAY_SERIAL_BAUD")
 INPUT_DEVICE = env_value("AUDIO_INPUT_DEVICE", allow_empty=True)
 INPUT_DEVICE_REQUIRED = bool(INPUT_DEVICE and not INPUT_DEVICE.isdigit())

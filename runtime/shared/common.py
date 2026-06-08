@@ -87,6 +87,7 @@ LOG_LEVEL_ALIASES = {
     "warn": "warning",
     "err": "error",
 }
+LOG_DIR = Path("/app/log")
 LOG_LOCK = threading.Lock()
 LOG_FILE_ERROR_REPORTED = False
 
@@ -103,11 +104,8 @@ def log_threshold(env_key: str, default: str) -> int:
     return LOG_LEVELS[normalize_log_level(os.getenv(env_key), default)]
 
 
-def log_file_path(role: str) -> Path | None:
-    log_dir = os.getenv("CHAT2ME_LOG_DIR", "/app/log").strip()
-    if not log_dir or log_dir.lower() in {"none", "off", "disabled"}:
-        return None
-    return Path(log_dir) / f"{role}.log"
+def log_file_path(role: str) -> Path:
+    return LOG_DIR / f"{role}.log"
 
 
 def log(message: str, *, level: str = "info") -> None:
@@ -122,16 +120,15 @@ def log(message: str, *, level: str = "info") -> None:
 
     if level_value >= log_threshold("CHAT2ME_LOG_LEVEL", "info"):
         path = log_file_path(role)
-        if path is not None:
-            try:
-                with LOG_LOCK:
-                    path.parent.mkdir(parents=True, exist_ok=True)
-                    with path.open("a", encoding="utf-8") as file:
-                        file.write(file_line + "\n")
-            except OSError as exc:
-                if not LOG_FILE_ERROR_REPORTED:
-                    LOG_FILE_ERROR_REPORTED = True
-                    print(f"[{role}] warning: log file write failed: {exc}", file=sys.stderr, flush=True)
+        try:
+            with LOG_LOCK:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                with path.open("a", encoding="utf-8") as file:
+                    file.write(file_line + "\n")
+        except OSError as exc:
+            if not LOG_FILE_ERROR_REPORTED:
+                LOG_FILE_ERROR_REPORTED = True
+                print(f"[{role}] warning: log file write failed: {exc}", file=sys.stderr, flush=True)
 
     if level_value >= log_threshold("CHAT2ME_CONSOLE_LOG_LEVEL", "warning"):
         stream = sys.stderr if level_value >= LOG_LEVELS["warning"] else sys.stdout
