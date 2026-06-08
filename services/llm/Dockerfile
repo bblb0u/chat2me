@@ -21,12 +21,14 @@ RUN pip3 install --break-system-packages --no-cache-dir -r requirements.txt
 
 COPY config /defaults/config
 COPY services/llm/entrypoint.sh /entrypoint.sh
+COPY runtime/shared/common.py ./app/common.py
 COPY services/llm/app ./app
 RUN chmod +x /entrypoint.sh
 
 ENV LD_LIBRARY_PATH=/usr/lib/ollama:/usr/lib/ollama/cuda_jetpack5:/usr/local/nvidia/lib:/usr/local/nvidia/lib64 \
     NVIDIA_DRIVER_CAPABILITIES=compute,utility \
     NVIDIA_VISIBLE_DEVICES=all \
+    VOICE_ROLE=chat2me-llm \
     OLLAMA_HOST=0.0.0.0:11434
 
 ENTRYPOINT ["/entrypoint.sh"]

@@ -78,7 +78,7 @@ def apply_event(payload: dict[str, object]) -> None:
             }
         )
     display.set_state(state, text)
-    log(f"relay state: {state}")
+    log(f"relay state: {state}", level="debug")
 
 
 def set_source_error(error: str) -> None:
@@ -160,5 +160,5 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         log("stopped")
     except Exception as exc:
-        log(f"fatal: {exc}")
+        log(f"fatal: {exc}", level="error")
         sys.exit(1)

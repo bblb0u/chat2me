@@ -7,6 +7,7 @@ services:
     restart: unless-stopped
     runtime: nvidia
     environment:
+      VOICE_ROLE: chat2me-llm
       NVIDIA_VISIBLE_DEVICES: all
       NVIDIA_DRIVER_CAPABILITIES: compute,utility
       OLLAMA_LLM_LIBRARY: cuda_jetpack5
@@ -15,6 +16,7 @@ services:
       OLLAMA_BASE_URL: http://127.0.0.1:11434
     volumes:
       - ./data/config:/app/config
+      - ./data/log:/app/log
       - ./data/ollama:/root/.ollama
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8082/health"]
@@ -27,8 +29,11 @@ services:
     image: gitwarp.pages.dev/bblb0u/chat2me-core:latest
     container_name: chat2me-core
     restart: unless-stopped
+    environment:
+      VOICE_ROLE: chat2me-core
     volumes:
       - ./data/config:/app/config
+      - ./data/log:/app/log
     depends_on:
       chat2me-llm:
         condition: service_started
@@ -49,6 +54,7 @@ services:
     volumes:
       - /dev:/host-dev
       - ./data/config:/app/config
+      - ./data/log:/app/log
     environment:
       VOICE_ROLE: chat2me-relay
       RELAY_SOURCE_URL: http://chat2me-speech:8090/state
@@ -69,6 +75,7 @@ services:
     volumes:
       - ./data/models:/models
       - ./data/config:/app/config
+      - ./data/log:/app/log
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8092/health"]
       interval: 30s
@@ -90,6 +97,7 @@ services:
     volumes:
       - ./data/models:/models
       - ./data/config:/app/config
+      - ./data/log:/app/log
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8093/health"]
       interval: 30s
@@ -110,6 +118,7 @@ services:
     volumes:
       - ./data/models:/models
       - ./data/config:/app/config
+      - ./data/log:/app/log
       - /etc/asound.conf:/etc/asound.conf:ro
     depends_on:
       chat2me-core:

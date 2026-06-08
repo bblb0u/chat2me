@@ -138,7 +138,7 @@ class ReSpeakerAudioSource:
             try:
                 self.write(name, value)
             except Exception as exc:
-                log(f"respeaker tuning write failed: {name}={value}: {exc}")
+                log(f"respeaker tuning write failed: {name}={value}: {exc}", level="warning")
         log("respeaker tuning applied")
 
     def normalize_angle(self, raw_angle: int) -> int:
@@ -163,7 +163,7 @@ class ReSpeakerAudioSource:
         try:
             voice_activity: bool | None = bool(self.read("VOICEACTIVITY"))
         except Exception as exc:
-            log(f"respeaker voice activity read failed: {exc}")
+            log(f"respeaker voice activity read failed: {exc}", level="debug")
             voice_activity = None
 
         sector = direction_sector(angle)
@@ -197,7 +197,7 @@ def open_respeaker() -> ReSpeakerAudioSource | None:
         log("respeaker control disabled")
         return None
     if usb is None:
-        log("respeaker control unavailable: pyusb is not installed")
+        log("respeaker control unavailable: pyusb is not installed", level="warning")
         return None
 
     vendor_id = env_int_base("RESPEAKER_USB_VENDOR_ID")
@@ -205,7 +205,7 @@ def open_respeaker() -> ReSpeakerAudioSource | None:
     try:
         dev = usb.core.find(idVendor=vendor_id, idProduct=product_id)
     except Exception as exc:
-        log(f"respeaker control unavailable: {exc}")
+        log(f"respeaker control unavailable: {exc}", level="warning")
         return None
     if dev is None:
         log(f"respeaker control device not found: vid=0x{vendor_id:04x} pid=0x{product_id:04x}")

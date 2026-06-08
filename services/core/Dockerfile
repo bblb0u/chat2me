@@ -1,6 +1,7 @@
 FROM python:3.11-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
+    VOICE_ROLE=chat2me-core \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1
 
@@ -11,6 +12,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY config /defaults/config
 COPY runtime/entrypoints/config.sh /entrypoint.sh
+COPY runtime/shared/common.py ./app/common.py
 COPY services/core/app ./app
 RUN chmod +x /entrypoint.sh
 

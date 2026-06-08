@@ -199,7 +199,7 @@ class WakeHandler(BaseHTTPRequestHandler):
                 HTTPStatus.BAD_GATEWAY,
             )
         except Exception as exc:
-            log(f"diagnostic turn failed: {exc}")
+            log(f"diagnostic turn failed: {exc}", level="warning")
             self._send_json({"ok": False, "error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
 
 
@@ -463,7 +463,7 @@ def run_session_thread(recognizer, voice, tts_config, display: SpeechState, beep
         log("wake signal received")
         run_session(recognizer, voice, tts_config, display, beep_path, audio_source)
     except Exception as exc:
-        log(f"session failed: {exc}")
+        log(f"session failed: {exc}", level="warning")
         if display is not None:
             display.set_state("error", str(exc))
     finally:
@@ -562,7 +562,7 @@ def open_session_input(input_device: int | str | None, chunk: int) -> sd.InputSt
                     audio.close()
                 except Exception:
                     pass
-            log(f"speech input stream unavailable; retrying: {exc}")
+            log(f"speech input stream unavailable; retrying: {exc}", level="debug")
             time.sleep(0.25)
 
     if last_error is not None:
@@ -642,5 +642,5 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         log("stopped")
     except Exception as exc:
-        log(f"fatal: {exc}")
+        log(f"fatal: {exc}", level="error")
         sys.exit(1)

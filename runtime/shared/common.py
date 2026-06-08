@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import re
+import sys
 import threading
 import time
 from pathlib import Path
@@ -76,9 +77,65 @@ def env_bool(key: str) -> bool:
     raise RuntimeError(f"{key} must be a boolean in runtime.env")
 
 
-def log(message: str) -> None:
-    role = os.getenv("VOICE_ROLE", "chat2me-speech")
-    print(f"[{role}] {message}", flush=True)
+LOG_LEVELS = {
+    "debug": 10,
+    "info": 20,
+    "warning": 30,
+    "error": 40,
+}
+LOG_LEVEL_ALIASES = {
+    "warn": "warning",
+    "err": "error",
+}
+LOG_LOCK = threading.Lock()
+LOG_FILE_ERROR_REPORTED = False
+
+
+def normalize_log_level(value: str | None, default: str) -> str:
+    normalized = (value or default).strip().lower()
+    normalized = LOG_LEVEL_ALIASES.get(normalized, normalized)
+    if normalized in LOG_LEVELS:
+        return normalized
+    return default
+
+
+def log_threshold(env_key: str, default: str) -> int:
+    return LOG_LEVELS[normalize_log_level(os.getenv(env_key), default)]
+
+
+def log_file_path(role: str) -> Path | None:
+    log_dir = os.getenv("CHAT2ME_LOG_DIR", "/app/log").strip()
+    if not log_dir or log_dir.lower() in {"none", "off", "disabled"}:
+        return None
+    return Path(log_dir) / f"{role}.log"
+
+
+def log(message: str, *, level: str = "info") -> None:
+    global LOG_FILE_ERROR_REPORTED
+
+    level_name = normalize_log_level(level, "info")
+    level_value = LOG_LEVELS[level_name]
+    role = os.getenv("VOICE_ROLE", "chat2me")
+    timestamp = time.strftime("%Y-%m-%dT%H:%M:%S%z")
+    file_line = f"{timestamp} [{level_name}] [{role}] {message}"
+    console_line = f"[{role}] {level_name}: {message}"
+
+    if level_value >= log_threshold("CHAT2ME_LOG_LEVEL", "info"):
+        path = log_file_path(role)
+        if path is not None:
+            try:
+                with LOG_LOCK:
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    with path.open("a", encoding="utf-8") as file:
+                        file.write(file_line + "\n")
+            except OSError as exc:
+                if not LOG_FILE_ERROR_REPORTED:
+                    LOG_FILE_ERROR_REPORTED = True
+                    print(f"[{role}] warning: log file write failed: {exc}", file=sys.stderr, flush=True)
+
+    if level_value >= log_threshold("CHAT2ME_CONSOLE_LOG_LEVEL", "warning"):
+        stream = sys.stderr if level_value >= LOG_LEVELS["warning"] else sys.stdout
+        print(console_line, file=stream, flush=True)
 
 
 class DisplayClient:
@@ -124,7 +181,7 @@ class DisplayClient:
         try:
             import serial
         except ImportError as exc:
-            log(f"display serial dependency unavailable: {exc}")
+            log(f"display serial dependency unavailable: {exc}", level="warning")
             self._disabled_until = time.monotonic() + self.retry_seconds
             return
 
@@ -140,6 +197,6 @@ class DisplayClient:
                         f"display serial partial write: {written}/{len(line)} bytes"
                     )
             except serial.SerialException as exc:
-                log(f"display serial write failed: {exc}")
+                log(f"display serial write failed: {exc}", level="warning")
                 self._close_locked()
                 self._disabled_until = time.monotonic() + self.retry_seconds

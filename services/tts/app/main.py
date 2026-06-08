@@ -231,7 +231,7 @@ async def speak(request: SpeakRequest) -> Response:
                     },
                 )
             except Exception as exc:
-                log(f"online TTS failed; falling back to local: {exc}")
+                log(f"online TTS failed; falling back to local: {exc}", level="warning")
 
         if LOCAL_VOICE is None:
             raise HTTPException(status_code=503, detail="local TTS is not ready")

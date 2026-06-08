@@ -74,7 +74,7 @@ Compose 中实际运行 6 个容器：
 准备目录和默认配置：
 
 ```bash
-mkdir -p data/config data/models data/ollama
+mkdir -p data/config data/models data/ollama data/log
 docker compose run --rm --no-deps chat2me-core true
 ```
 
@@ -109,8 +109,8 @@ docker compose run --rm --no-deps -e VOICE_ROLE=chat2me-tts chat2me-tts true
 查看日志：
 
 ```bash
-docker compose logs -f chat2me-llm chat2me-core
-docker compose logs -f chat2me-speech chat2me-asr chat2me-tts chat2me-relay
+tail -f data/log/chat2me-*.log
+docker compose logs -f
 ```
 
 停止：
@@ -122,6 +122,16 @@ docker compose down
 ## 配置说明
 
 运行配置以根目录 `config/` 为模板。容器首次启动时，entrypoint 会把默认文件复制到 `data/config/`，之后只读取和修改 `data/config/` 下的副本。
+
+日志等级：
+
+```env
+CHAT2ME_LOG_LEVEL=info
+CHAT2ME_CONSOLE_LOG_LEVEL=warning
+CHAT2ME_LOG_DIR=/app/log
+```
+
+支持 `error`、`warning`、`info`、`debug` 四档。默认把 `info` 及以上写入 `data/log/<镜像名>.log`，Docker 控制台只显示 `warning/error`；模型下载和校验进度仍会直接输出到 `docker compose logs`，方便冷启动观察。
 
 常用 LLM 配置：
 
@@ -147,17 +157,15 @@ OLLAMA_MODEL=qwen3:4b-instruct
 ```env
 VOICE_ASR_ENGINE=sherpa
 VOICE_ASR_MODEL=sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20
-VOICE_ASR_DEVICE=cpu
 VOICE_TTS_ENGINE=melotts
 VOICE_TTS_MODEL=MeloTTS-Chinese
 VOICE_TTS_DEVICE=auto
-VOICE_KWS_PROVIDER=cpu
 MELOTTS_LANGUAGE=ZH
 MELOTTS_SPEAKER=ZH
 MELOTTS_DISABLE_BERT=1
 ```
 
-Sherpa ONNX 的 KWS/ASR 默认固定 `cpu`，不会探测 CUDA。可显式配置 `auto/cuda/gpu`，但当前默认镜像使用 CPU 版 Sherpa wheel，强制 CUDA 会启动失败。MeloTTS 使用 PyTorch device，默认 `auto`，支持 `auto/cpu/cuda/gpu/cuda:<index>`。
+Sherpa ONNX 的 KWS/ASR 在默认镜像中固定使用 CPU，不暴露 CUDA/provider 配置，也不会探测 CUDA。MeloTTS 使用 PyTorch device，默认 `auto`，支持 `auto/cpu/cuda/gpu/cuda:<index>`。
 
 在线 TTS，失败回落本地：
 
@@ -284,6 +292,7 @@ PY
 - `data/config/`：运行时配置副本，真正生效的是这里。
 - `data/models/`：KWS/ASR/TTS 模型缓存，以及生成的唤醒词、热词文件。
 - `data/ollama/`：Ollama 模型、密钥和运行数据。
+- `data/log/`：各服务文件日志，文件名为 `chat2me-llm.log`、`chat2me-core.log`、`chat2me-asr.log` 等。
 
 迁移机器时保留 `data/`，即可复用配置和已下载模型。`data/` 是运行时目录，不参与镜像构建。
 
@@ -357,7 +366,7 @@ PY
 
 | 文件 | 作用 |
 | --- | --- |
-| `runtime/shared/common.py` | ASR/TTS/Speech/Relay 共享运行时工具：读取 `runtime.env`、环境变量解析、日志、串口显示客户端。 |
+| `runtime/shared/common.py` | 各 Python 服务共享运行时工具：读取 `runtime.env`、环境变量解析、分级文件日志、串口显示客户端。 |
 | `runtime/shared/voice.py` | ASR/TTS/Speech 共享语音逻辑：模型创建、远程 ASR/TTS 适配、音频读写、噪声门限、播放、服务探活缓存。 |
 | `runtime/entrypoints/config.sh` | Core 和 Relay 共用入口：首次启动时初始化 `/app/config`。 |
 | `runtime/entrypoints/audio.sh` | ASR/TTS/Speech 镜像入口：初始化配置、解析模型选择、下载/校验 KWS/ASR/TTS 模型。 |
@@ -394,6 +403,7 @@ PY
 | `data/config/*` | 当前机器实际生效的配置。 |
 | `data/models/*` | 已下载模型和运行时生成文件。 |
 | `data/ollama/*` | Ollama 模型、缓存和密钥。 |
+| `data/log/*` | 服务日志文件，默认每个镜像一个 `.log`。 |
 
 ## 支持的模型
 

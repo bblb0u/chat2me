@@ -11,6 +11,8 @@ import yaml
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
+from app.common import log
+
 
 def load_runtime_env() -> None:
     path = Path(os.getenv("RUNTIME_CONFIG_PATH", "/app/config/runtime.env"))
@@ -119,6 +121,11 @@ class DirectionResponse(BaseModel):
 
 
 app = FastAPI(title="Chat2Me Core", version="0.1.0")
+
+
+@app.on_event("startup")
+async def startup() -> None:
+    log(f"core service ready: llm_url={CORE_LLM_URL}")
 
 
 MATCH_REMOVE_PATTERN = re.compile(r"[\s，。！？、,.!?;；:：\"'“”‘’（）()【】\[\]{}<>《》]")
@@ -283,10 +290,13 @@ async def chat(request: ChatRequest) -> ChatResponse:
         result = await call_llm_service(request)
     except httpx.HTTPStatusError as exc:
         detail = exc.response.text[:800]
+        log(f"LLM service returned HTTP {exc.response.status_code}: {detail}", level="warning")
         raise HTTPException(status_code=502, detail=detail) from exc
     except httpx.ReadTimeout as exc:
+        log("LLM service timed out", level="warning")
         raise HTTPException(status_code=504, detail="大模型生成超时。") from exc
     except httpx.HTTPError as exc:
+        log(f"LLM service unavailable: {exc}", level="warning")
         raise HTTPException(status_code=502, detail=f"LLM 服务不可用：{exc}") from exc
 
     if contains_blocked_keyword(result.answer):

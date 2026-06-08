@@ -78,7 +78,6 @@ else:
     except ValueError:
         raise RuntimeError("AUDIO_INPUT_CHANNEL_INDEX must be an integer or auto in runtime.env") from None
 KWS_THREADS = env_int("KWS_THREADS")
-VOICE_KWS_PROVIDER = os.getenv("VOICE_KWS_PROVIDER", "cpu").strip().lower() or "cpu"
 ASR_THREADS = env_int("ASR_THREADS")
 ASR_MODEL_PRECISION = env_value("ASR_MODEL_PRECISION")
 ASR_DECODING_METHOD = env_value("ASR_DECODING_METHOD")
@@ -121,7 +120,6 @@ TTS_WARMUP_TEXTS = tuple(
     if text.strip()
 )
 TTS_MODEL_DIR = MODELS_DIR / VOICE_TTS_ENGINE / VOICE_TTS_MODEL
-VOICE_ASR_DEVICE = os.getenv("VOICE_ASR_DEVICE", "cpu").strip().lower() or "cpu"
 VOICE_TTS_DEVICE = os.getenv("VOICE_TTS_DEVICE", "auto").strip().lower()
 MELOTTS_CONFIG_FILE = Path(os.getenv("MELOTTS_CONFIG_FILE", str(TTS_MODEL_DIR / "config.json")))
 MELOTTS_CKPT_FILE = Path(os.getenv("MELOTTS_CKPT_FILE", str(TTS_MODEL_DIR / "checkpoint.pth")))
@@ -200,56 +198,6 @@ def require_file(path: Path) -> None:
         raise FileNotFoundError(f"missing required file: {path}")
 
 
-def sherpa_provider_candidates(setting_name: str, requested: str) -> tuple[str, tuple[str, ...]]:
-    value = requested.strip().lower() or "auto"
-    if value == "auto":
-        return value, ("cuda", "cpu")
-    if value in {"cuda", "gpu"}:
-        return value, ("cuda",)
-    if value == "cpu":
-        return value, ("cpu",)
-    raise RuntimeError(f"{setting_name} must be auto, cpu, cuda, or gpu")
-
-
-def sherpa_gpu_build_unavailable() -> bool:
-    import sherpa_onnx
-
-    root = Path(sherpa_onnx.__file__).resolve().parent
-    needle = b"Please compile with -DSHERPA_ONNX_ENABLE_GPU=ON"
-    for lib in (root / "lib").glob("*.so"):
-        try:
-            if needle in lib.read_bytes():
-                return True
-        except OSError:
-            continue
-    return False
-
-
-def create_with_sherpa_provider(
-    label: str,
-    setting_name: str,
-    requested: str,
-    factory: Any,
-) -> tuple[Any, str]:
-    requested_value, candidates = sherpa_provider_candidates(setting_name, requested)
-    cuda_error: Exception | None = None
-    for provider in candidates:
-        try:
-            instance = factory(provider)
-        except Exception as exc:
-            if requested_value == "auto" and provider == "cuda":
-                cuda_error = exc
-                continue
-            raise RuntimeError(f"{label} failed with {setting_name}={provider}: {exc}") from exc
-        if cuda_error is not None and provider == "cpu":
-            log(f"{label} CUDA provider is unavailable for auto; using CPU: {cuda_error}")
-        if provider == "cuda" and sherpa_gpu_build_unavailable():
-            log(f"{label} CUDA provider is not enabled in this sherpa-onnx wheel; using CPU fallback")
-            return instance, "cpu-fallback"
-        return instance, provider
-    raise RuntimeError(f"{label} failed to initialize with {setting_name}=auto")
-
-
 def wake_words_display() -> str:
     return " / ".join(WAKE_WORDS)
 
@@ -310,29 +258,18 @@ def create_kws() -> Any:
     require_file(KWS_MODEL_DIR / "decoder-epoch-13-avg-2-chunk-8-left-64.onnx")
     require_file(KWS_MODEL_DIR / "joiner-epoch-13-avg-2-chunk-8-left-64.int8.onnx")
 
-    def build(provider: str) -> Any:
-        return sherpa_onnx.KeywordSpotter(
-            tokens=str(KWS_MODEL_DIR / "tokens.txt"),
-            encoder=str(KWS_MODEL_DIR / "encoder-epoch-13-avg-2-chunk-8-left-64.int8.onnx"),
-            decoder=str(KWS_MODEL_DIR / "decoder-epoch-13-avg-2-chunk-8-left-64.onnx"),
-            joiner=str(KWS_MODEL_DIR / "joiner-epoch-13-avg-2-chunk-8-left-64.int8.onnx"),
-            num_threads=KWS_THREADS,
-            keywords_file=str(keywords_file),
-            keywords_score=KWS_KEYWORDS_SCORE,
-            keywords_threshold=KWS_KEYWORDS_THRESHOLD,
-            provider=provider,
-        )
-
-    spotter, provider = create_with_sherpa_provider(
-        "KWS",
-        "VOICE_KWS_PROVIDER",
-        VOICE_KWS_PROVIDER,
-        build,
+    spotter = sherpa_onnx.KeywordSpotter(
+        tokens=str(KWS_MODEL_DIR / "tokens.txt"),
+        encoder=str(KWS_MODEL_DIR / "encoder-epoch-13-avg-2-chunk-8-left-64.int8.onnx"),
+        decoder=str(KWS_MODEL_DIR / "decoder-epoch-13-avg-2-chunk-8-left-64.onnx"),
+        joiner=str(KWS_MODEL_DIR / "joiner-epoch-13-avg-2-chunk-8-left-64.int8.onnx"),
+        num_threads=KWS_THREADS,
+        keywords_file=str(keywords_file),
+        keywords_score=KWS_KEYWORDS_SCORE,
+        keywords_threshold=KWS_KEYWORDS_THRESHOLD,
+        provider="cpu",
     )
-    log(
-        "KWS config: "
-        f"model={KWS_MODEL_DIR} provider={provider} requested={VOICE_KWS_PROVIDER} threads={KWS_THREADS}"
-    )
+    log(f"KWS config: model={KWS_MODEL_DIR} provider=cpu threads={KWS_THREADS}")
     return spotter
 
 
@@ -490,7 +427,7 @@ def transcribe_remote_audio(samples: np.ndarray, sample_rate: int) -> str:
     engine = payload.get("engine")
     model = payload.get("model")
     fallback = payload.get("fallback")
-    log(f"remote asr result: route={route} engine={engine} model={model} fallback={fallback}")
+    log(f"remote asr result: route={route} engine={engine} model={model} fallback={fallback}", level="debug")
     return str(payload.get("text") or "").strip()
 
 
@@ -510,38 +447,30 @@ def create_sherpa_asr() -> StreamingRecognizer:
         "ASR config: "
         f"precision={ASR_MODEL_PRECISION} decoding={ASR_DECODING_METHOD} "
         f"max_active_paths={ASR_MAX_ACTIVE_PATHS} hotwords={HOTWORDS_PATH} "
-        f"device={VOICE_ASR_DEVICE}"
+        "provider=cpu"
     )
 
-    def build(provider: str) -> Any:
-        return sherpa_onnx.OnlineRecognizer.from_transducer(
-            tokens=str(ASR_MODEL_DIR / "tokens.txt"),
-            encoder=str(encoder),
-            decoder=str(decoder),
-            joiner=str(joiner),
-            num_threads=ASR_THREADS,
-            sample_rate=SAMPLE_RATE,
-            feature_dim=80,
-            enable_endpoint_detection=True,
-            rule1_min_trailing_silence=ASR_RULE1_MIN_TRAILING_SILENCE,
-            rule2_min_trailing_silence=ASR_RULE2_MIN_TRAILING_SILENCE,
-            rule3_min_utterance_length=ASR_RULE3_MIN_UTTERANCE_LENGTH,
-            decoding_method=ASR_DECODING_METHOD,
-            max_active_paths=ASR_MAX_ACTIVE_PATHS,
-            hotwords_file=hotwords_file,
-            hotwords_score=ASR_HOTWORDS_SCORE,
-            modeling_unit=ASR_MODELING_UNIT,
-            bpe_vocab=str(bpe_vocab) if bpe_vocab.is_file() else "",
-            provider=provider,
-        )
-
-    recognizer, provider = create_with_sherpa_provider(
-        "Sherpa ASR",
-        "VOICE_ASR_DEVICE",
-        VOICE_ASR_DEVICE,
-        build,
+    recognizer = sherpa_onnx.OnlineRecognizer.from_transducer(
+        tokens=str(ASR_MODEL_DIR / "tokens.txt"),
+        encoder=str(encoder),
+        decoder=str(decoder),
+        joiner=str(joiner),
+        num_threads=ASR_THREADS,
+        sample_rate=SAMPLE_RATE,
+        feature_dim=80,
+        enable_endpoint_detection=True,
+        rule1_min_trailing_silence=ASR_RULE1_MIN_TRAILING_SILENCE,
+        rule2_min_trailing_silence=ASR_RULE2_MIN_TRAILING_SILENCE,
+        rule3_min_utterance_length=ASR_RULE3_MIN_UTTERANCE_LENGTH,
+        decoding_method=ASR_DECODING_METHOD,
+        max_active_paths=ASR_MAX_ACTIVE_PATHS,
+        hotwords_file=hotwords_file,
+        hotwords_score=ASR_HOTWORDS_SCORE,
+        modeling_unit=ASR_MODELING_UNIT,
+        bpe_vocab=str(bpe_vocab) if bpe_vocab.is_file() else "",
+        provider="cpu",
     )
-    log(f"Sherpa ASR loaded: provider={provider} requested={VOICE_ASR_DEVICE}")
+    log("Sherpa ASR loaded: provider=cpu")
     return SherpaStreamingRecognizer(recognizer)
 
 
@@ -574,7 +503,7 @@ def play_wav(path: Path) -> None:
     try:
         subprocess.run(["aplay", "-q", "-D", OUTPUT_DEVICE, str(path)], check=False)
     except FileNotFoundError as exc:
-        log(f"aplay is unavailable: {exc}")
+        log(f"aplay is unavailable: {exc}", level="warning")
 
 
 class MeloTextToSpeech:
@@ -739,7 +668,7 @@ def create_melotts_tts() -> TextToSpeech:
     except Exception:
         detail = init_output.getvalue().strip()
         if detail:
-            log(f"MeloTTS init output before failure: {detail[-2000:]}")
+            log(f"MeloTTS init output before failure: {detail[-2000:]}", level="error")
         raise
     if MELOTTS_DISABLE_BERT:
         setattr(model.hps.data, "disable_bert", True)
@@ -833,7 +762,7 @@ def synthesize_remote_wav(text: str) -> bytes:
     engine = response.headers.get("X-Chat2Me-TTS-Engine", "")
     model = response.headers.get("X-Chat2Me-TTS-Model", "")
     fallback = response.headers.get("X-Chat2Me-TTS-Fallback", "")
-    log(f"remote tts result: route={route} engine={engine} model={model} fallback={fallback}")
+    log(f"remote tts result: route={route} engine={engine} model={model} fallback={fallback}", level="debug")
     return response.content
 
 
@@ -949,7 +878,10 @@ def speak(text: str, voice: TextToSpeech, config: Any = None) -> None:
         started = time.monotonic()
         pcm = b"".join(chunk for chunk in voice.synthesize_pcm(text) if chunk)
         duration = len(pcm) / max(1, voice.config.sample_rate * 2)
-        log(f"tts buffered pcm: bytes={len(pcm)} duration={duration:.2f}s synth={time.monotonic() - started:.2f}s")
+        log(
+            f"tts buffered pcm: bytes={len(pcm)} duration={duration:.2f}s synth={time.monotonic() - started:.2f}s",
+            level="debug",
+        )
         result = subprocess.run(playback_command(), input=pcm, check=False, timeout=TTS_PLAYER_TIMEOUT_SECONDS)
         if result.returncode != 0:
             raise RuntimeError(f"aplay exited with status {result.returncode}")
@@ -969,7 +901,10 @@ def speak(text: str, voice: TextToSpeech, config: Any = None) -> None:
             if buffered_bytes >= min_bytes:
                 break
         duration = buffered_bytes / max(1, voice.config.sample_rate * 2)
-        log(f"tts hybrid prebuffer: bytes={buffered_bytes} duration={duration:.2f}s wait={time.monotonic() - started:.2f}s")
+        log(
+            f"tts hybrid prebuffer: bytes={buffered_bytes} duration={duration:.2f}s wait={time.monotonic() - started:.2f}s",
+            level="debug",
+        )
         play_pcm_chunks(playback_command(), chain(buffered, iterator))
         return
 
@@ -1037,7 +972,7 @@ def mono(samples: np.ndarray) -> np.ndarray:
 def read_mono(audio: Any, frames: int) -> np.ndarray:
     samples, overflowed = audio.read(frames)
     if overflowed:
-        log("audio input overflowed; command audio may be clipped")
+        log("audio input overflowed; command audio may be clipped", level="warning")
     return mono(samples).reshape(-1)
 
 
@@ -1058,7 +993,7 @@ def feed_asr(
     recognizer.accept_waveform(stream, SAMPLE_RATE, samples)
     result = decode_ready_asr(recognizer, stream)
     if result and result != last_text:
-        log(f"asr partial: {result}")
+        log(f"asr partial: {result}", level="debug")
         return result
     return last_text
 
@@ -1167,7 +1102,7 @@ def refresh_llm_route_cache() -> None:
             response.raise_for_status()
             data: dict[str, Any] = response.json()
     except Exception as exc:
-        log(f"llm reachability cache unavailable: {exc}")
+        log(f"llm reachability cache unavailable: {exc}", level="debug")
         data = {"online": False, "provider": "", "model": "", "status": "unavailable"}
 
     route = "online" if data.get("online") is True else "local"
@@ -1193,7 +1128,7 @@ def refresh_service_reachability(url: str, cache: dict[str, Any], lock: threadin
             response.raise_for_status()
             data: dict[str, Any] = response.json()
     except Exception as exc:
-        log(f"{label} reachability cache unavailable: {exc}")
+        log(f"{label} reachability cache unavailable: {exc}", level="debug")
         data = {"online": False, "provider": "", "model": "", "status": "unavailable"}
 
     with lock:
@@ -1288,7 +1223,7 @@ def handle_conversation_turn(
     try:
         answer = ask_core(command)
     except Exception as exc:
-        log(f"core request failed: {exc}")
+        log(f"core request failed: {exc}", level="warning")
         display.set_state("error", "core unavailable")
         speak_pausing_input(audio, CORE_UNAVAILABLE_RESPONSE, voice, tts_config, display)
         return True

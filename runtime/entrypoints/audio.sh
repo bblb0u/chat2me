@@ -6,6 +6,51 @@ DEFAULT_CONFIG_DIR="${DEFAULT_CONFIG_DIR:-/defaults/config}"
 CONFIG_DIR="${CONFIG_DIR:-/app/config}"
 RUNTIME_CONFIG_PATH="${RUNTIME_CONFIG_PATH:-$CONFIG_DIR/runtime.env}"
 
+normalize_log_level() {
+  case "$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')" in
+    debug|info|warning|error) printf '%s' "$1" | tr '[:upper:]' '[:lower:]' ;;
+    warn) echo "warning" ;;
+    err) echo "error" ;;
+    *) echo "$2" ;;
+  esac
+}
+
+log_level_value() {
+  case "$(normalize_log_level "$1" info)" in
+    debug) echo 10 ;;
+    info) echo 20 ;;
+    warning) echo 30 ;;
+    error) echo 40 ;;
+    *) echo 20 ;;
+  esac
+}
+
+runtime_env_value() {
+  key="$1"
+  [ -f "$RUNTIME_CONFIG_PATH" ] || return 1
+  sed -n "s/^${key}=//p" "$RUNTIME_CONFIG_PATH" | tail -n 1
+}
+
+chat2me_log() {
+  level="$(normalize_log_level "${1:-info}" info)"
+  message="$2"
+  role="${VOICE_ROLE:-chat2me}"
+  file_level="$(normalize_log_level "${CHAT2ME_LOG_LEVEL:-$(runtime_env_value CHAT2ME_LOG_LEVEL || true)}" info)"
+  console_level="$(normalize_log_level "${CHAT2ME_CONSOLE_LOG_LEVEL:-$(runtime_env_value CHAT2ME_CONSOLE_LOG_LEVEL || true)}" warning)"
+  log_dir="${CHAT2ME_LOG_DIR:-$(runtime_env_value CHAT2ME_LOG_DIR || true)}"
+  log_dir="${log_dir:-/app/log}"
+  level_value="$(log_level_value "$level")"
+  timestamp="$(date '+%Y-%m-%dT%H:%M:%S%z')"
+
+  if [ "$level_value" -ge "$(log_level_value "$file_level")" ] && [ -n "$log_dir" ]; then
+    mkdir -p "$log_dir" 2>/dev/null || true
+    printf '%s [%s] [%s] %s\n' "$timestamp" "$level" "$role" "$message" >> "$log_dir/$role.log" 2>/dev/null || true
+  fi
+  if [ "$level_value" -ge "$(log_level_value "$console_level")" ]; then
+    printf '[%s] %s: %s\n' "$role" "$level" "$message" >&2
+  fi
+}
+
 default_voice_model_set() {
   case "$VOICE_ROLE" in
     chat2me-speech) echo "kws" ;;
@@ -247,7 +292,7 @@ init_config() {
     target_file="$CONFIG_DIR/$(basename "$source_file")"
     if [ ! -e "$target_file" ]; then
       cp "$source_file" "$target_file"
-      echo "Initialized config: $target_file"
+      chat2me_log info "Initialized config: $target_file"
     fi
   done
 }
@@ -263,7 +308,6 @@ required_files_ok() {
 
 kws_runtime_ok() {
   python3 - "$KWS_MODEL" "$WAKE_WORDS" <<'PY'
-import os
 import subprocess
 import sys
 import tempfile
@@ -278,19 +322,7 @@ if not wake_words:
     sys.exit(1)
 
 
-def provider_candidates(name, requested):
-    value = (requested or "auto").strip().lower() or "auto"
-    if value == "auto":
-        return value, ("cuda", "cpu")
-    if value in {"cuda", "gpu"}:
-        return value, ("cuda",)
-    if value == "cpu":
-        return value, ("cpu",)
-    print(f"{name} must be auto, cpu, cuda, or gpu", file=sys.stderr)
-    sys.exit(1)
-
-
-def create_keyword_spotter(provider, keywords):
+def create_keyword_spotter(keywords):
     return sherpa_onnx.KeywordSpotter(
         tokens=f"{model_dir}/tokens.txt",
         encoder=f"{model_dir}/encoder-epoch-13-avg-2-chunk-8-left-64.int8.onnx",
@@ -298,7 +330,7 @@ def create_keyword_spotter(provider, keywords):
         joiner=f"{model_dir}/joiner-epoch-13-avg-2-chunk-8-left-64.int8.onnx",
         num_threads=1,
         keywords_file=str(keywords),
-        provider=provider,
+        provider="cpu",
     )
 
 try:
@@ -323,19 +355,7 @@ try:
             check=True,
         )
 
-        requested, providers = provider_candidates("VOICE_KWS_PROVIDER", os.getenv("VOICE_KWS_PROVIDER", "cpu"))
-        cuda_error = None
-        for provider in providers:
-            try:
-                create_keyword_spotter(provider, keywords)
-                break
-            except Exception as exc:
-                if requested == "auto" and provider == "cuda":
-                    cuda_error = exc
-                    continue
-                raise
-        else:
-            raise RuntimeError(f"KWS failed with VOICE_KWS_PROVIDER=auto; CUDA error: {cuda_error}")
+        create_keyword_spotter(keywords)
 except Exception as exc:
     print(f"Invalid KWS model: {model_dir}: {exc}", file=sys.stderr)
     sys.exit(1)
@@ -345,7 +365,6 @@ PY
 asr_runtime_ok() {
   python3 - "$ASR_MODEL" "$AUDIO_SAMPLE_RATE" "${ASR_MODEL_PRECISION:-fp32}" "${ASR_DECODING_METHOD:-modified_beam_search}" "${ASR_MAX_ACTIVE_PATHS:-8}" <<'PY'
 import sys
-import os
 import sherpa_onnx
 
 model_dir = sys.argv[1]
@@ -356,19 +375,7 @@ max_active_paths = int(sys.argv[5])
 suffix = ".int8.onnx" if precision in {"int8", "quantized"} else ".onnx"
 
 
-def provider_candidates(name, requested):
-    value = (requested or "auto").strip().lower() or "auto"
-    if value == "auto":
-        return value, ("cuda", "cpu")
-    if value in {"cuda", "gpu"}:
-        return value, ("cuda",)
-    if value == "cpu":
-        return value, ("cpu",)
-    print(f"{name} must be auto, cpu, cuda, or gpu for Sherpa ASR", file=sys.stderr)
-    sys.exit(1)
-
-
-def create_recognizer(provider):
+def create_recognizer():
     return sherpa_onnx.OnlineRecognizer.from_transducer(
         tokens=f"{model_dir}/tokens.txt",
         encoder=f"{model_dir}/encoder-epoch-99-avg-1{suffix}",
@@ -380,23 +387,11 @@ def create_recognizer(provider):
         enable_endpoint_detection=True,
         decoding_method=decoding_method,
         max_active_paths=max_active_paths,
-        provider=provider,
+        provider="cpu",
     )
 
 try:
-    requested, providers = provider_candidates("VOICE_ASR_DEVICE", os.getenv("VOICE_ASR_DEVICE", "cpu"))
-    cuda_error = None
-    for provider in providers:
-        try:
-            create_recognizer(provider)
-            break
-        except Exception as exc:
-            if requested == "auto" and provider == "cuda":
-                cuda_error = exc
-                continue
-            raise
-    else:
-        raise RuntimeError(f"Sherpa ASR failed with VOICE_ASR_DEVICE=auto; CUDA error: {cuda_error}")
+    create_recognizer()
 except Exception as exc:
     print(f"Invalid ASR model: {model_dir}: {exc}", file=sys.stderr)
     sys.exit(1)
@@ -496,54 +491,14 @@ require_command() {
   command -v "$command_name" >/dev/null 2>&1 || missing_image_dependency "Command '$command_name'"
 }
 
-verify_torch_cuda_runtime() {
-  python3 <<'PY'
-import sys
-
-try:
-    import torch
-except Exception as exc:
-    print(f"torch import failed: {exc}", file=sys.stderr)
-    sys.exit(1)
-
-if not torch.cuda.is_available():
-    print(f"torch cuda unavailable: torch={torch.__version__} cuda={getattr(torch.version, 'cuda', None)}", file=sys.stderr)
-    sys.exit(1)
-
-print(f"[runtime] torch cuda ready: torch={torch.__version__} cuda={torch.version.cuda} devices={torch.cuda.device_count()}")
-PY
-}
-
 ensure_kws_runtime() {
   require_python_module sherpa_onnx
   require_command sherpa-onnx-cli
 }
 
-sherpa_gpu_runtime_ok() {
-  python3 <<'PY'
-import sys
-from pathlib import Path
-
-import sherpa_onnx
-
-root = Path(sherpa_onnx.__file__).resolve().parent
-needle = b"Please compile with -DSHERPA_ONNX_ENABLE_GPU=ON"
-for lib in (root / "lib").glob("*.so"):
-    try:
-        if needle in lib.read_bytes():
-            sys.exit(1)
-    except OSError:
-        pass
-sys.exit(0)
-PY
-}
-
 ensure_sherpa_asr_runtime() {
   ensure_kws_runtime
   require_python_module pypinyin
-  case "$(normalize_key "${VOICE_ASR_DEVICE:-auto}")" in
-    cuda|gpu|cuda:*) sherpa_gpu_runtime_ok || missing_image_dependency "Sherpa ONNX GPU runtime" ;;
-  esac
 }
 
 ensure_melotts_runtime() {
@@ -919,7 +874,7 @@ while ! mkdir "$LOCK_DIR" 2>/dev/null; do
     lock_waited=0
   fi
 done
-echo "[models] voice model download lock acquired: $MODEL_SET"
+chat2me_log info "voice model download lock acquired: $MODEL_SET"
 trap 'cleanup_model_lock' EXIT
 trap 'cleanup_model_lock; exit 129' HUP
 trap 'cleanup_model_lock; exit 130' INT

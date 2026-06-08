@@ -14,6 +14,8 @@ import httpx
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
+from app.common import log
+
 
 def load_runtime_env() -> None:
     path = Path(os.getenv("RUNTIME_CONFIG_PATH", "/app/config/runtime.env"))
@@ -393,8 +395,10 @@ async def call_llm(
         if provider_is_online() and online_ok:
             try:
                 return await call_online_result(message, system_prompt)
-            except httpx.HTTPError:
+            except httpx.HTTPError as exc:
+                log(f"online LLM failed; falling back to local: {exc}", level="warning")
                 return await call_local_result(message, system_prompt=system_prompt, fallback=True, online_status="request_failed")
+        log(f"online LLM unavailable; falling back to local: {reachability.status}", level="warning")
         return await call_local_result(message, system_prompt=system_prompt, fallback=True, online_status=reachability.status)
 
     if provider_is_local():
@@ -403,8 +407,10 @@ async def call_llm(
         if online_ok:
             try:
                 return await call_online_result(message, system_prompt)
-            except httpx.HTTPError:
+            except httpx.HTTPError as exc:
+                log(f"online LLM failed; falling back to local: {exc}", level="warning")
                 return await call_local_result(message, system_prompt=system_prompt, fallback=True, online_status="request_failed")
+        log(f"online LLM unavailable; falling back to local: {reachability.status}", level="warning")
         return await call_local_result(message, system_prompt=system_prompt, fallback=True, online_status=reachability.status)
     raise LLMConfigError("未配置 LLM_PROVIDER。")
 
@@ -444,6 +450,7 @@ async def remote_reachability_loop() -> None:
 
 async def start_remote_reachability_loop() -> None:
     global REMOTE_REACHABILITY_TASK, REMOTE_REACHABILITY
+    log(f"llm service ready: provider={LLM_PROVIDER} local_model={OLLAMA_MODEL or 'unset'}")
     if provider_is_online():
         REMOTE_REACHABILITY = await probe_remote_health()
         REMOTE_REACHABILITY_TASK = asyncio.create_task(remote_reachability_loop())
