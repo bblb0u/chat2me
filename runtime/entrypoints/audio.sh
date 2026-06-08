@@ -431,7 +431,6 @@ melotts_runtime_ok() {
   python_module_ok torch \
     && python_module_ok melo.api \
     && python_module_ok soundfile \
-    && python_module_ok transformers \
     && python_module_ok pypinyin \
     && python_module_ok cn2an \
     && python_module_ok jieba
@@ -470,14 +469,15 @@ required_relative_files_ok() {
 
 python_module_ok() {
   python3 - "$1" <<'PY'
-import importlib.util
+import importlib
 import sys
 
 try:
-    found = importlib.util.find_spec(sys.argv[1]) is not None
-except ModuleNotFoundError:
-    found = False
-sys.exit(0 if found else 1)
+    importlib.import_module(sys.argv[1])
+except Exception as exc:
+    print(f"[runtime] Python module '{sys.argv[1]}' import failed: {exc}", file=sys.stderr)
+    sys.exit(1)
+sys.exit(0)
 PY
 }
 
