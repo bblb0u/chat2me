@@ -40,6 +40,10 @@ def load_runtime_env() -> None:
 load_runtime_env()
 
 LOCAL_LLM_PROVIDERS = {"ollama", "local"}
+ONLINE_LLM_PROVIDERS = {"online"}
+CHAT_COMPLETIONS_PATH = "/chat/completions"
+RESPONSES_PATH = "/responses"
+MODELS_PATH = "/models"
 
 
 def env_value(key: str, *, allow_empty: bool = False, default: str | None = None) -> str:
@@ -75,22 +79,11 @@ def normalize_provider(value: str) -> str:
     return value.strip().lower().replace("-", "_")
 
 
-def normalize_api_path(value: str) -> str:
-    normalized = value.strip()
-    if not normalized:
-        raise RuntimeError("API path values in runtime.env must not be empty")
-    if not normalized.startswith("/"):
-        normalized = f"/{normalized}"
-    return normalized.rstrip("/") or "/"
-
-
 LLM_PROVIDER = normalize_provider(env_value("LLM_PROVIDER"))
 OLLAMA_BASE_URL = "http://127.0.0.1:11434"
 OLLAMA_MODEL = env_value("OLLAMA_MODEL", allow_empty=True)
 LLM_MODEL = env_value("LLM_MODEL", allow_empty=True)
 LLM_BASE_URL = env_value("LLM_BASE_URL", allow_empty=True).rstrip("/")
-LLM_CHAT_COMPLETIONS_PATH = normalize_api_path(env_value("LLM_CHAT_COMPLETIONS_PATH"))
-LLM_REACHABILITY_PATH = normalize_api_path(env_value("LLM_REACHABILITY_PATH"))
 LLM_TEMPERATURE = env_float("LLM_TEMPERATURE")
 LLM_TOP_P = env_float("LLM_TOP_P")
 LLM_MAX_TOKENS = env_int("LLM_MAX_TOKENS")
@@ -164,8 +157,8 @@ class LLMReachability:
     checked_at: float | None = None
 
 
-REMOTE_REACHABILITY = LLMReachability(online=False, status="not_checked")
-REMOTE_REACHABILITY_TASK: asyncio.Task[None] | None = None
+ONLINE_REACHABILITY = LLMReachability(online=False, status="not_checked")
+ONLINE_REACHABILITY_TASK: asyncio.Task[None] | None = None
 
 
 def chat_messages(message: str, system_prompt: str | None = None) -> list[dict[str, str]]:
@@ -177,21 +170,28 @@ def chat_messages(message: str, system_prompt: str | None = None) -> list[dict[s
     return messages
 
 
-def remote_base_url() -> str:
+def online_base_url() -> str:
     base_url = LLM_BASE_URL
-    suffix = LLM_CHAT_COMPLETIONS_PATH
-    if base_url.endswith(suffix):
-        base_url = base_url[: -len(suffix)]
+    for suffix in (CHAT_COMPLETIONS_PATH, RESPONSES_PATH):
+        if base_url.endswith(suffix):
+            base_url = base_url[: -len(suffix)]
+            break
     return base_url
 
 
-def remote_api_key() -> str:
+def online_completion_url() -> str:
+    if LLM_BASE_URL.endswith((CHAT_COMPLETIONS_PATH, RESPONSES_PATH)):
+        return LLM_BASE_URL
+    return f"{online_base_url()}{CHAT_COMPLETIONS_PATH}"
+
+
+def online_api_key() -> str:
     return env_value("LLM_API_KEY", allow_empty=True)
 
 
-def remote_headers() -> dict[str, str]:
+def online_headers() -> dict[str, str]:
     headers = {"Content-Type": "application/json"}
-    api_key = remote_api_key()
+    api_key = online_api_key()
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
     return headers
@@ -202,15 +202,15 @@ def provider_is_local() -> bool:
 
 
 def provider_is_online() -> bool:
-    return bool(LLM_PROVIDER) and not provider_is_local()
+    return LLM_PROVIDER in ONLINE_LLM_PROVIDERS
 
 
-def require_remote_config() -> str:
+def require_online_config() -> str:
     if not LLM_MODEL:
-        raise LLMConfigError("远程大模型未配置 LLM_MODEL。")
-    base_url = remote_base_url()
+        raise LLMConfigError("在线大模型未配置 LLM_MODEL。")
+    base_url = online_base_url()
     if not base_url:
-        raise LLMConfigError("远程大模型未配置 LLM_BASE_URL。")
+        raise LLMConfigError("在线大模型未配置 LLM_BASE_URL。")
     return base_url
 
 
@@ -220,8 +220,8 @@ def require_local_model() -> str:
     return OLLAMA_MODEL
 
 
-def remote_uses_responses_api() -> bool:
-    return LLM_CHAT_COMPLETIONS_PATH.rstrip("/").endswith("/responses")
+def online_uses_responses_api() -> bool:
+    return LLM_BASE_URL.endswith(RESPONSES_PATH)
 
 
 def text_parts(items: list[Any]) -> list[str]:
@@ -234,7 +234,7 @@ def text_parts(items: list[Any]) -> list[str]:
     return parts
 
 
-def extract_remote_answer(data: dict[str, Any]) -> str:
+def extract_online_answer(data: dict[str, Any]) -> str:
     choices = data.get("choices") or []
     if choices:
         message_data = choices[0].get("message") or {}
@@ -314,9 +314,9 @@ async def call_ollama(message: str, model: str, system_prompt: str | None = None
     return strip_thinking(str(answer))
 
 
-async def call_remote_llm(message: str, system_prompt: str | None = None) -> str:
-    base_url = require_remote_config()
-    if remote_uses_responses_api():
+async def call_online_llm(message: str, system_prompt: str | None = None) -> str:
+    require_online_config()
+    if online_uses_responses_api():
         payload: dict[str, Any] = {
             "model": LLM_MODEL,
             "input": message,
@@ -339,9 +339,9 @@ async def call_remote_llm(message: str, system_prompt: str | None = None) -> str
         payload[LLM_MAX_TOKENS_FIELD] = LLM_MAX_TOKENS
     timeout = httpx.Timeout(connect=LLM_CONNECT_TIMEOUT_SECONDS, read=LLM_TIMEOUT_SECONDS, write=10.0, pool=5.0)
     async with httpx.AsyncClient(timeout=timeout) as client:
-        response = await client.post(f"{base_url}{LLM_CHAT_COMPLETIONS_PATH}", headers=remote_headers(), json=payload)
+        response = await client.post(online_completion_url(), headers=online_headers(), json=payload)
         response.raise_for_status()
-    return strip_thinking(extract_remote_answer(response_json(response)))
+    return strip_thinking(extract_online_answer(response_json(response)))
 
 
 def normalize_llm_route(route: str | None) -> str:
@@ -350,7 +350,7 @@ def normalize_llm_route(route: str | None) -> str:
         return "auto"
     if value in {"local", "ollama"}:
         return "local"
-    if value in {"online", "remote"}:
+    if value == "online":
         return "online"
     raise LLMConfigError(f"不支持的 llm_route：{route}")
 
@@ -358,7 +358,7 @@ def normalize_llm_route(route: str | None) -> str:
 def cached_online_available(override: bool | None = None) -> bool:
     if override is not None:
         return override
-    return REMOTE_REACHABILITY.online
+    return ONLINE_REACHABILITY.online
 
 
 async def call_local_result(
@@ -374,8 +374,8 @@ async def call_local_result(
 
 
 async def call_online_result(message: str, system_prompt: str | None = None) -> LLMResult:
-    answer = await call_remote_llm(message, system_prompt)
-    return LLMResult(answer=answer, route="online", model=LLM_MODEL, online_status=REMOTE_REACHABILITY.status)
+    answer = await call_online_llm(message, system_prompt)
+    return LLMResult(answer=answer, route="online", model=LLM_MODEL, online_status=ONLINE_REACHABILITY.status)
 
 
 async def call_llm(
@@ -385,7 +385,7 @@ async def call_llm(
     system_prompt: str | None = None,
 ) -> LLMResult:
     requested_route = normalize_llm_route(route)
-    reachability = REMOTE_REACHABILITY
+    reachability = ONLINE_REACHABILITY
     online_ok = cached_online_available(online_available)
 
     if requested_route == "local":
@@ -424,55 +424,55 @@ async def check_ollama_health() -> str:
         return "unreachable"
 
 
-async def probe_remote_health() -> LLMReachability:
+async def probe_online_health() -> LLMReachability:
     try:
-        base_url = require_remote_config()
+        base_url = require_online_config()
     except LLMConfigError as exc:
         return LLMReachability(online=False, status=f"config_error:{exc}", checked_at=time.time())
 
     try:
         async with httpx.AsyncClient(timeout=LLM_REACHABILITY_TIMEOUT_SECONDS) as client:
-            response = await client.get(f"{base_url}{LLM_REACHABILITY_PATH}", headers=remote_headers())
+            response = await client.get(f"{base_url}{MODELS_PATH}", headers=online_headers())
             status = "ok" if response.is_success else f"http_{response.status_code}"
             return LLMReachability(online=response.is_success, status=status, checked_at=time.time())
     except httpx.HTTPError:
         return LLMReachability(online=False, status="unreachable", checked_at=time.time())
 
 
-async def remote_reachability_loop() -> None:
-    global REMOTE_REACHABILITY
+async def online_reachability_loop() -> None:
+    global ONLINE_REACHABILITY
 
     interval = max(0.5, LLM_REACHABILITY_INTERVAL_SECONDS)
     while True:
-        REMOTE_REACHABILITY = await probe_remote_health()
+        ONLINE_REACHABILITY = await probe_online_health()
         await asyncio.sleep(interval)
 
 
-async def start_remote_reachability_loop() -> None:
-    global REMOTE_REACHABILITY_TASK, REMOTE_REACHABILITY
+async def start_online_reachability_loop() -> None:
+    global ONLINE_REACHABILITY_TASK, ONLINE_REACHABILITY
     log(f"llm service ready: provider={LLM_PROVIDER} local_model={OLLAMA_MODEL or 'unset'}")
     if provider_is_online():
-        REMOTE_REACHABILITY = await probe_remote_health()
-        REMOTE_REACHABILITY_TASK = asyncio.create_task(remote_reachability_loop())
+        ONLINE_REACHABILITY = await probe_online_health()
+        ONLINE_REACHABILITY_TASK = asyncio.create_task(online_reachability_loop())
 
 
-async def stop_remote_reachability_loop() -> None:
-    if REMOTE_REACHABILITY_TASK is None:
+async def stop_online_reachability_loop() -> None:
+    if ONLINE_REACHABILITY_TASK is None:
         return
-    REMOTE_REACHABILITY_TASK.cancel()
+    ONLINE_REACHABILITY_TASK.cancel()
     try:
-        await REMOTE_REACHABILITY_TASK
+        await ONLINE_REACHABILITY_TASK
     except asyncio.CancelledError:
         pass
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    await start_remote_reachability_loop()
+    await start_online_reachability_loop()
     try:
         yield
     finally:
-        await stop_remote_reachability_loop()
+        await stop_online_reachability_loop()
 
 
 app = FastAPI(title="Chat2Me LLM", version="0.1.0", lifespan=lifespan)
@@ -488,7 +488,7 @@ async def llm_reachability() -> ReachabilityResponse:
             status="online_provider_disabled",
         )
 
-    reachability = REMOTE_REACHABILITY
+    reachability = ONLINE_REACHABILITY
     return ReachabilityResponse(
         online=reachability.online,
         provider=LLM_PROVIDER,
@@ -501,7 +501,7 @@ async def llm_reachability() -> ReachabilityResponse:
 @app.get("/health", response_model=HealthResponse)
 async def health() -> HealthResponse:
     ollama_status = await check_ollama_health()
-    reachability = REMOTE_REACHABILITY
+    reachability = ONLINE_REACHABILITY
     if provider_is_online():
         status = "ok" if reachability.online or ollama_status == "ok" else "degraded"
         return HealthResponse(

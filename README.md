@@ -1,8 +1,8 @@
 # Chat2Me
 
-Chat2Me 是一套跑在机器人硬件上的中文语音交互系统，不是面向浏览器的通用聊天 Demo。当前默认平台是 NVIDIA Jetson / ARM64，典型外设包括 ReSpeaker 麦克风阵列、ALSA 扬声器和 ESP32-S3 触摸屏。
+Chat2Me 是一套部署在机器人硬件上的中文语音交互系统，默认面向 NVIDIA Jetson / ARM64 平台。典型外设包括 ReSpeaker 麦克风阵列、ALSA 扬声器和 ESP32-S3 触摸屏。
 
-系统把唤醒词、语音识别、对话编排、LLM、语音合成、声源方向和外设状态同步拆成独立模块，通过 Docker Compose 组合运行。LLM 镜像内置 Ollama；ASR、TTS、Speech、Relay 分别构建独立镜像；ASR 固定使用本地 Sherpa ONNX，LLM 可以按配置切到 OpenAI-compatible 在线服务，TTS 支持本地 MeloTTS 或在线 EdgeTTS，在线不可用时回落到本地模型。
+系统按职责拆分为唤醒、语音识别、对话编排、LLM、语音合成、声源方向和外设状态同步等服务，通过 Docker Compose 组合运行。LLM 支持本地 Ollama 和 OpenAI-compatible 在线服务；ASR 使用 Sherpa ONNX；TTS 支持本地 MeloTTS，也可以通过第三方 `edge-tts` 包调用 Microsoft Edge 在线语音服务，在线不可用时回落到本地模型。
 
 ## 硬件和平台
 
@@ -13,7 +13,7 @@ Chat2Me 是一套跑在机器人硬件上的中文语音交互系统，不是面
 - ALSA 音频输出设备，用于播放 TTS。
 - Waveshare ESP32-S3-Touch-LCD-3.5 或同类串口外设，用于显示状态、文本和后续交互信号。
 
-其他硬件可以改配置适配，但项目当前不是按 x86 桌面或纯云端部署设计。
+其他硬件可通过配置适配；当前部署目标仍以 Jetson 机器人硬件为主。
 
 ## 系统职责
 
@@ -53,7 +53,7 @@ Compose 中实际运行 6 个容器：
 - `chat2me-llm`：LLM 网关和本地 Ollama。
 - `chat2me-core`：业务编排、固定问答、安全过滤、对外 `/chat`。
 - `chat2me-relay`：可选外设交互桥，主动读取 `chat2me-speech /state`，并转发状态、文本和动作提示等信号。
-- `chat2me-asr`：本地 Sherpa ONNX ASR 服务。
+- `chat2me-asr`：Sherpa ONNX ASR 服务。
 - `chat2me-tts`：TTS 服务，支持在线优先、本地回落。
 - `chat2me-speech`：麦克风监听、唤醒、会话流程、播放和状态接口。
 
@@ -62,9 +62,9 @@ Compose 中实际运行 6 个容器：
 - 后端语言：Python 3.11、Python 3.8/Ubuntu 20.04 ASR/TTS/Speech 镜像运行环境。
 - Web/API：FastAPI、Uvicorn、Pydantic、httpx；语音主循环和状态服务使用 `http.server`。
 - 本地 LLM：Ollama，默认 `qwen3:4b-instruct`。
-- 在线模型接口：OpenAI-compatible `/chat/completions` 或 `/responses`。
+- 在线模型接口：OpenAI-compatible HTTP 接口。
 - ASR：Sherpa ONNX streaming ASR。
-- TTS：官方 MeloTTS、在线 EdgeTTS。
+- TTS：本地 MeloTTS；在线模式通过第三方 `edge-tts` 包调用 Microsoft Edge 在线语音服务。
 - 音频：sounddevice、ALSA `aplay`、ffmpeg、PyUSB、ReSpeaker USB tuning/DOA。
 - 容器：Docker Compose、Docker Hub ARM64 镜像、GitHub Actions Buildx 发布。
 - 固件：ESP-IDF 5.5.x、C/C++、LVGL、ST7796 LCD、FT6336 Touch、AXP2101 PMU。
@@ -87,7 +87,7 @@ vim data/config/safety.yaml
 vim data/config/hotwords.yaml
 ```
 
-只启动文字对话链路：
+启动文字对话链路：
 
 ```bash
 docker compose up -d chat2me-llm chat2me-core
@@ -121,7 +121,7 @@ docker compose down
 
 ## 配置说明
 
-运行配置以根目录 `config/` 为模板。容器首次启动时，entrypoint 会把默认文件复制到 `data/config/`，之后只读取和修改 `data/config/` 下的副本。
+运行配置以根目录 `config/` 为模板。容器首次启动时，entrypoint 会把默认文件复制到 `data/config/`，之后使用 `data/config/` 下的副本。
 
 日志等级：
 
@@ -130,7 +130,7 @@ CHAT2ME_LOG_LEVEL=info
 CHAT2ME_CONSOLE_LOG_LEVEL=warning
 ```
 
-支持 `error`、`warning`、`info`、`debug` 四档。默认把 `info` 及以上写入容器内固定目录 `/app/log`，由 compose 映射到 `data/log/chat2me-tts.log`、`data/log/chat2me-core.log` 这类固定服务日志；Docker 控制台只显示 `warning/error`。模型下载和校验进度仍会直接输出到 `docker compose logs`，方便冷启动观察。
+支持 `error`、`warning`、`info`、`debug` 四档。默认把 `info` 及以上写入容器内目录 `/app/log`，由 compose 映射到 `data/log/chat2me-tts.log`、`data/log/chat2me-core.log` 这类服务日志；Docker 控制台显示 `warning/error`。模型下载和校验进度仍会直接输出到 `docker compose logs`，方便冷启动观察。
 
 常用 LLM 配置：
 
@@ -142,10 +142,8 @@ OLLAMA_MODEL=qwen3:4b-instruct
 在线 LLM，失败回落本地 Ollama：
 
 ```env
-LLM_PROVIDER=remote
+LLM_PROVIDER=online
 LLM_BASE_URL=https://api.openai.com/v1
-LLM_CHAT_COMPLETIONS_PATH=/chat/completions
-LLM_REACHABILITY_PATH=/models
 LLM_MODEL=gpt-5-mini
 LLM_API_KEY=sk-...
 OLLAMA_MODEL=qwen3:4b-instruct
@@ -164,9 +162,9 @@ MELOTTS_SPEAKER=ZH
 MELOTTS_DISABLE_BERT=1
 ```
 
-Sherpa ONNX 的 KWS/ASR 在默认镜像中固定使用 CPU，不暴露 CUDA/provider 配置，也不会探测 CUDA。MeloTTS 使用 PyTorch device，默认 `auto`，支持 `auto/cpu/cuda/gpu/cuda:<index>`。
+Sherpa ONNX 的 KWS/ASR 使用 CPU 运行。MeloTTS 使用 PyTorch device，默认 `auto`，支持 `auto/cpu/cuda/gpu/cuda:<index>`。
 
-在线 TTS，失败回落本地：
+在线 TTS，失败时回落本地：
 
 ```env
 VOICE_TTS_ENGINE=online
@@ -178,7 +176,26 @@ EDGE_TTS_PITCH=+0Hz
 EDGE_TTS_PROXY=
 ```
 
-ASR 不再支持在线路由，`VOICE_ASR_ENGINE` 只支持 `sherpa`。
+`edge-tts` 是第三方 Python 包；TTS 镜像依赖为 `edge-tts==7.2.8`，用于调用 Microsoft Edge 在线语音服务。
+
+常用中文音色：
+
+| 配置值 | 说明 |
+| --- | --- |
+| `zh-CN-XiaoxiaoNeural` | 普通话女声 |
+| `zh-CN-XiaoyiNeural` | 普通话女声 |
+| `zh-CN-YunjianNeural` | 普通话男声 |
+| `zh-CN-YunxiNeural` | 普通话男声 |
+| `zh-CN-YunxiaNeural` | 普通话男声 |
+| `zh-CN-YunyangNeural` | 普通话男声 |
+| `zh-CN-liaoning-XiaobeiNeural` | 辽宁方言女声 |
+| `zh-CN-shaanxi-XiaoniNeural` | 陕西方言女声 |
+| `zh-HK-HiuGaaiNeural` | 香港粤语女声 |
+| `zh-HK-HiuMaanNeural` | 香港粤语女声 |
+| `zh-HK-WanLungNeural` | 香港粤语男声 |
+| `zh-TW-HsiaoChenNeural` | 台湾国语女声 |
+| `zh-TW-HsiaoYuNeural` | 台湾国语女声 |
+| `zh-TW-YunJheNeural` | 台湾国语男声 |
 
 角色、固定问答和安全策略：
 
@@ -186,7 +203,7 @@ ASR 不再支持在线路由，`VOICE_ASR_ENGINE` 只支持 `sherpa`。
 - `safety.yaml`：输入/输出敏感关键词和阻断回复。
 - `hotwords.yaml`：ASR 热词，提高特定中文词识别概率。
 
-## 具体实现
+## 运行流程
 
 `chat2me-speech` 是语音会话入口。它启动后会：
 
@@ -207,22 +224,22 @@ ASR 不再支持在线路由，`VOICE_ASR_ENGINE` 只支持 `sherpa`。
 4. 未命中固定问答时，把用户问题和 `system_prompt` 转发给 `chat2me-llm`。
 5. 对 LLM 输出再做一次安全过滤。
 
-`chat2me-llm` 同时管理在线 LLM 和本地 Ollama：
+`chat2me-llm` 负责在线 LLM 与本地 Ollama 的路由：
 
-- `LLM_PROVIDER=ollama/local` 时只走本地 Ollama。
-- `LLM_PROVIDER=remote` 或其他非本地值时，后台周期访问 reachability 接口。
+- `LLM_PROVIDER=ollama/local` 时使用本地 Ollama。
+- `LLM_PROVIDER=online` 时，后台周期访问 reachability 接口。
 - 在线可用时调用在线模型，不可用或请求失败时回落 `OLLAMA_MODEL`。
 - 支持 OpenAI Chat Completions 风格响应，也兼容 Responses API 的 `output_text/output` 字段。
 
-`chat2me-asr` 和 `chat2me-tts` 是独立推理服务：
+`chat2me-asr` 和 `chat2me-tts` 独立运行：
 
-- `chat2me-asr` 启动时只创建本地 Sherpa ONNX 识别实例。
-- `chat2me-tts` 启动时创建本地 TTS；配置 `VOICE_TTS_ENGINE=online` 时也创建在线实例并后台探活。
-- TTS 请求会优先使用调用方传入的 `online_available` 缓存值，避免每次请求阻塞探活。
+- `chat2me-asr` 启动时创建 Sherpa ONNX 识别实例。
+- `chat2me-tts` 启动时创建本地 TTS；配置 `VOICE_TTS_ENGINE=online` 时同时创建在线实例并后台探活。
+- TTS 请求优先使用调用方传入的 `online_available` 缓存值，避免每次请求阻塞在探活流程。
 - 在线 TTS 请求失败会自动回落到本地 `melotts/MeloTTS-Chinese`。
 - ASR 输入是 16-bit PCM WAV；TTS 输出是 `audio/wav`。
 
-`chat2me-relay` 不是语音主链路的一部分。它把 `chat2me-speech /state` 暴露出来的交互状态转成外设可消费的消息，当前默认写给 ESP32-S3 屏幕固件，也可以扩展成灯光、舵机、触摸板、上位机状态同步或其他机器人交互通道。
+`chat2me-relay` 是语音主链路之外的外设桥。它把 `chat2me-speech /state` 暴露出来的交互状态转成外设可消费的消息，当前默认写给 ESP32-S3 屏幕固件，也可以扩展成灯光、舵机、触摸板、上位机状态同步或其他机器人交互通道。
 
 ESP32 显示固件通过 USB Serial/JTAG 从标准输入读取一行 JSON：
 
@@ -230,7 +247,7 @@ ESP32 显示固件通过 USB Serial/JTAG 从标准输入读取一行 JSON：
 {"state":"speaking","text":"回答内容"}
 ```
 
-当前固件只解析 `state` 字段，并用 LVGL 动画展示不同颜色/节奏的状态 UI；Relay 侧保留 `text` 等字段，方便外设按需要消费更多交互信息。
+当前固件解析 `state` 字段，并用 LVGL 动画展示不同颜色/节奏的状态 UI；Relay 侧保留 `text` 等字段，方便外设按需要消费更多交互信息。
 
 ## API
 
@@ -270,7 +287,7 @@ ESP32 显示固件通过 USB Serial/JTAG 从标准输入读取一行 JSON：
 
 - `GET /health`
 
-它不在语音主链路内，只轮询 `chat2me-speech /state` 并转发到外设。
+它作为语音主链路之外的服务，轮询 `chat2me-speech /state` 并转发到外设。
 
 示例：
 
@@ -332,7 +349,7 @@ PY
 
 | 文件 | 作用 |
 | --- | --- |
-| `services/asr/Dockerfile` | 构建 ASR 镜像，默认 `VOICE_ROLE=chat2me-asr`，只安装 Sherpa ASR 服务和 WAV 上传接口所需依赖。 |
+| `services/asr/Dockerfile` | 构建 ASR 镜像，默认 `VOICE_ROLE=chat2me-asr`，安装 Sherpa ASR 服务和 WAV 上传接口所需依赖。 |
 | `services/asr/requirements.txt` | ASR 服务基础 Python 依赖。 |
 | `services/asr/app/main.py` | ASR FastAPI 服务入口：WAV 上传、本地识别和 reachability。 |
 
@@ -340,15 +357,15 @@ PY
 
 | 文件 | 作用 |
 | --- | --- |
-| `services/tts/Dockerfile` | 构建 TTS 镜像，默认 `VOICE_ROLE=chat2me-tts`，只安装 TTS 服务、在线合成和本地 TTS 引擎所需依赖。 |
+| `services/tts/Dockerfile` | 构建 TTS 镜像，默认 `VOICE_ROLE=chat2me-tts`，安装 TTS 服务、在线合成和本地 TTS 引擎所需依赖。 |
 | `services/tts/requirements.txt` | TTS 服务基础 Python 依赖。 |
-| `services/tts/app/main.py` | TTS FastAPI 服务入口：文本合成 WAV、在线/本地合成、fallback、reachability。 |
+| `services/tts/app/main.py` | TTS FastAPI 服务入口：文本合成 WAV、在线/本地合成、回落和 reachability。 |
 
 ### services/speech
 
 | 文件 | 作用 |
 | --- | --- |
-| `services/speech/Dockerfile` | 构建 Speech 镜像，默认 `VOICE_ROLE=chat2me-speech`，只安装唤醒、麦克风输入、扬声器播放、ReSpeaker 和远程调用所需依赖。 |
+| `services/speech/Dockerfile` | 构建 Speech 镜像，默认 `VOICE_ROLE=chat2me-speech`，安装唤醒、麦克风输入、扬声器播放、ReSpeaker 和远程调用所需依赖。 |
 | `services/speech/requirements.txt` | Speech 服务基础 Python 依赖。 |
 | `services/speech/app/main.py` | Speech 服务入口：唤醒监听、会话循环、HTTP `/wake`、状态接口、诊断回合和远程 ASR/TTS 调用。 |
 | `services/speech/app/respeaker.py` | ReSpeaker USB 参数读写、降噪/AGC/AEC tuning、DOA 角度和方向话术。 |
@@ -357,7 +374,7 @@ PY
 
 | 文件 | 作用 |
 | --- | --- |
-| `services/relay/Dockerfile` | 构建 Relay 镜像，默认 `VOICE_ROLE=chat2me-relay`，只安装状态轮询和串口转发所需依赖。 |
+| `services/relay/Dockerfile` | 构建 Relay 镜像，默认 `VOICE_ROLE=chat2me-relay`，安装状态轮询和串口转发所需依赖。 |
 | `services/relay/requirements.txt` | Relay 服务基础 Python 依赖。 |
 | `services/relay/app/main.py` | Relay 服务入口：主动读取 `chat2me-speech /state`，状态变化时写入串口外设，后续可扩展灯光、动作提示、状态同步等输出。 |
 
@@ -374,7 +391,7 @@ PY
 
 | 文件 | 作用 |
 | --- | --- |
-| `services/tts/install_melotts.sh` | TTS 镜像专用构建脚本：下载固定版本 MeloTTS 源码并应用中文本地模型所需补丁。Python/apt 依赖由 `services/tts/requirements.txt` 和 `services/tts/Dockerfile` 显式安装。 |
+| `services/tts/install_melotts.sh` | TTS 镜像专用构建脚本：下载指定版本 MeloTTS 源码并应用中文本地模型所需补丁。Python/apt 依赖由 `services/tts/requirements.txt` 和 `services/tts/Dockerfile` 显式安装。 |
 
 ### firmware/display
 
@@ -413,12 +430,12 @@ ASR：
 TTS：
 
 - `melotts`：`MeloTTS-Chinese`
-- `online`：`edge-tts`
+- `online`：`edge-tts`，第三方 Python 包，调用 Microsoft Edge 在线语音服务。
 
 LLM：
 
 - 本地 Ollama：由 `OLLAMA_MODEL` 指定。
-- 在线 OpenAI-compatible：由 `LLM_BASE_URL`、`LLM_CHAT_COMPLETIONS_PATH`、`LLM_MODEL`、`LLM_API_KEY` 指定。
+- 在线 OpenAI-compatible：由 `LLM_BASE_URL`、`LLM_MODEL`、`LLM_API_KEY` 指定。
 
 ## 显示屏固件
 
@@ -443,8 +460,8 @@ DISPLAY_SERIAL_BAUD=115200
 
 ## 注意事项
 
-- `docker-compose.yml` 使用 ARM64 镜像；LLM/TTS 服务默认使用 `runtime: nvidia`，ASR/KWS 固定 CPU。
+- `docker-compose.yml` 使用 ARM64 镜像；LLM/TTS 服务默认使用 `runtime: nvidia`，ASR/KWS 使用 CPU。
 - `chat2me-speech` 需要访问 `/dev/snd`、`/dev/bus/usb` 和宿主机 ALSA 配置。
 - `chat2me-relay` 通过挂载 `/dev` 到 `/host-dev` 查找 ESP32 或其他串口外设；不启动它不影响唤醒、收音、ASR/TTS 和对话。
 - LLM/TTS 在线模式不代表每次请求都先探测网络；服务会后台探活，请求使用最近缓存状态。
-- 修改 `config/*` 只影响新初始化的配置；已有部署请改 `data/config/*`。
+- 修改 `config/*` 会影响新初始化的配置；已有部署请改 `data/config/*`。
