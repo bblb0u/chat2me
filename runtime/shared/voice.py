@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import gc
 import io
+import logging
 import os
 import re
 import threading
@@ -9,6 +10,7 @@ import subprocess
 import time
 import wave
 from collections import deque
+from contextlib import redirect_stderr, redirect_stdout
 from itertools import chain
 from pathlib import Path
 from types import SimpleNamespace
@@ -76,7 +78,7 @@ else:
     except ValueError:
         raise RuntimeError("AUDIO_INPUT_CHANNEL_INDEX must be an integer or auto in runtime.env") from None
 KWS_THREADS = env_int("KWS_THREADS")
-VOICE_KWS_PROVIDER = os.getenv("VOICE_KWS_PROVIDER", "auto").strip().lower() or "auto"
+VOICE_KWS_PROVIDER = os.getenv("VOICE_KWS_PROVIDER", "cpu").strip().lower() or "cpu"
 ASR_THREADS = env_int("ASR_THREADS")
 ASR_MODEL_PRECISION = env_value("ASR_MODEL_PRECISION")
 ASR_DECODING_METHOD = env_value("ASR_DECODING_METHOD")
@@ -119,7 +121,7 @@ TTS_WARMUP_TEXTS = tuple(
     if text.strip()
 )
 TTS_MODEL_DIR = MODELS_DIR / VOICE_TTS_ENGINE / VOICE_TTS_MODEL
-VOICE_ASR_DEVICE = os.getenv("VOICE_ASR_DEVICE", "auto").strip().lower()
+VOICE_ASR_DEVICE = os.getenv("VOICE_ASR_DEVICE", "cpu").strip().lower() or "cpu"
 VOICE_TTS_DEVICE = os.getenv("VOICE_TTS_DEVICE", "auto").strip().lower()
 MELOTTS_CONFIG_FILE = Path(os.getenv("MELOTTS_CONFIG_FILE", str(TTS_MODEL_DIR / "config.json")))
 MELOTTS_CKPT_FILE = Path(os.getenv("MELOTTS_CKPT_FILE", str(TTS_MODEL_DIR / "checkpoint.pth")))
@@ -706,6 +708,13 @@ def resolve_melotts_speaker(model: Any) -> int:
 def create_melotts_tts() -> TextToSpeech:
     from melo.api import TTS
 
+    try:
+        import jieba
+
+        jieba.setLogLevel(logging.WARNING)
+    except Exception:
+        logging.getLogger("jieba").setLevel(logging.WARNING)
+
     require_file(MELOTTS_CONFIG_FILE)
     require_file(MELOTTS_CKPT_FILE)
     device = resolve_torch_device(VOICE_TTS_DEVICE)
@@ -717,13 +726,21 @@ def create_melotts_tts() -> TextToSpeech:
         f"noise_scale_w={MELOTTS_NOISE_SCALE_W}"
     )
     started = time.monotonic()
-    model = TTS(
-        language=MELOTTS_LANGUAGE,
-        device=device,
-        use_hf=False,
-        config_path=str(MELOTTS_CONFIG_FILE),
-        ckpt_path=str(MELOTTS_CKPT_FILE),
-    )
+    init_output = io.StringIO()
+    try:
+        with redirect_stdout(init_output), redirect_stderr(init_output):
+            model = TTS(
+                language=MELOTTS_LANGUAGE,
+                device=device,
+                use_hf=False,
+                config_path=str(MELOTTS_CONFIG_FILE),
+                ckpt_path=str(MELOTTS_CKPT_FILE),
+            )
+    except Exception:
+        detail = init_output.getvalue().strip()
+        if detail:
+            log(f"MeloTTS init output before failure: {detail[-2000:]}")
+        raise
     if MELOTTS_DISABLE_BERT:
         setattr(model.hps.data, "disable_bert", True)
         log("MeloTTS BERT features disabled")

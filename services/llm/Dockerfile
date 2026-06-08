@@ -30,4 +30,4 @@ ENV LD_LIBRARY_PATH=/usr/lib/ollama:/usr/lib/ollama/cuda_jetpack5:/usr/local/nvi
     OLLAMA_HOST=0.0.0.0:11434
 
 ENTRYPOINT ["/entrypoint.sh"]
-CMD ["python3", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8082"]
+CMD ["python3", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8082", "--no-access-log", "--log-level", "warning"]

@@ -4,6 +4,7 @@ set -eu
 DEFAULT_CONFIG_DIR="${DEFAULT_CONFIG_DIR:-/defaults/config}"
 CONFIG_DIR="${CONFIG_DIR:-/app/config}"
 RUNTIME_CONFIG_PATH="${RUNTIME_CONFIG_PATH:-$CONFIG_DIR/runtime.env}"
+OLLAMA_LOG_FILE="${OLLAMA_LOG_FILE:-/tmp/ollama.log}"
 
 init_config() {
   if [ ! -d "$DEFAULT_CONFIG_DIR" ]; then
@@ -129,6 +130,12 @@ pull_model_with_progress() {
   [ "$curl_status" -eq 0 ] && [ "$api_error" -eq 0 ]
 }
 
+print_ollama_log_tail() {
+  [ -f "$OLLAMA_LOG_FILE" ] || return 0
+  echo "[llm] recent Ollama log:" >&2
+  tail -n 80 "$OLLAMA_LOG_FILE" >&2 || true
+}
+
 init_config
 load_runtime_env
 : "${OLLAMA_MODEL:?OLLAMA_MODEL must be set in runtime.env}"
@@ -139,10 +146,15 @@ model_ok() {
     && /bin/ollama run "$MODEL" "只回答OK" >/dev/null 2>&1
 }
 
-/bin/ollama serve &
+/bin/ollama serve >>"$OLLAMA_LOG_FILE" 2>&1 &
 OLLAMA_PID="$!"
 
 until /bin/ollama list >/dev/null 2>&1; do
+  if ! kill -0 "$OLLAMA_PID" 2>/dev/null; then
+    echo "[llm] Ollama exited before it became ready" >&2
+    print_ollama_log_tail
+    exit 1
+  fi
   sleep 2
 done
 
@@ -166,6 +178,7 @@ done
     echo "$MODEL is ready"
   else
     echo "$MODEL was downloaded but failed runtime validation" >&2
+    print_ollama_log_tail
   fi
 ) &
 

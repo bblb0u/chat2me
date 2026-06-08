@@ -166,4 +166,4 @@ async def transcribe(
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run(app, host=ASR_HOST, port=ASR_PORT)
+    uvicorn.run(app, host=ASR_HOST, port=ASR_PORT, access_log=False, log_level="warning")

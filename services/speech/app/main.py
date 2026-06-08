@@ -511,16 +511,15 @@ def listen_for_wake(kws, input_device: int | str | None, chunk: int, display: Sp
 
 
 def wait_for_input_device(display: SpeechState) -> int | str | None:
-    last_log = 0.0
+    logged_waiting = False
     while True:
         input_device = select_input_device(INPUT_DEVICE)
         if input_device is not None or not INPUT_DEVICE_REQUIRED:
             return input_device
 
-        now = time.monotonic()
-        if now - last_log >= SPEECH_WAIT_LOG_SECONDS:
+        if not logged_waiting:
             log(f"waiting for configured input device: {INPUT_DEVICE}")
-            last_log = now
+            logged_waiting = True
         display.set_state("error", "audio input unavailable")
         time.sleep(SPEECH_WAIT_POLL_SECONDS)
 

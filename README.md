@@ -147,17 +147,17 @@ OLLAMA_MODEL=qwen3:4b-instruct
 ```env
 VOICE_ASR_ENGINE=sherpa
 VOICE_ASR_MODEL=sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20
-VOICE_ASR_DEVICE=auto
+VOICE_ASR_DEVICE=cpu
 VOICE_TTS_ENGINE=melotts
 VOICE_TTS_MODEL=MeloTTS-Chinese
 VOICE_TTS_DEVICE=auto
-VOICE_KWS_PROVIDER=auto
+VOICE_KWS_PROVIDER=cpu
 MELOTTS_LANGUAGE=ZH
 MELOTTS_SPEAKER=ZH
 MELOTTS_DISABLE_BERT=1
 ```
 
-GPU 相关默认值使用 `auto`：运行时先尝试 CUDA/GPU，当前镜像或宿主机不可用时才回落 CPU。显式配置 `cuda` 或 `gpu` 时不会回落，CUDA 不可用会直接启动失败；需要禁止 CPU 回落时就使用显式配置。Sherpa ONNX 的 KWS/ASR provider 使用 `auto/cpu/cuda/gpu`；MeloTTS 使用 PyTorch device，支持 `auto/cpu/cuda/gpu/cuda:<index>`。
+Sherpa ONNX 的 KWS/ASR 默认固定 `cpu`，不会探测 CUDA。可显式配置 `auto/cuda/gpu`，但当前默认镜像使用 CPU 版 Sherpa wheel，强制 CUDA 会启动失败。MeloTTS 使用 PyTorch device，默认 `auto`，支持 `auto/cpu/cuda/gpu/cuda:<index>`。
 
 在线 TTS，失败回落本地：
 
@@ -434,7 +434,7 @@ DISPLAY_SERIAL_BAUD=115200
 
 ## 注意事项
 
-- `docker-compose.yml` 使用 `runtime: nvidia` 和 ARM64 镜像，默认更适合 Jetson 设备。
+- `docker-compose.yml` 使用 ARM64 镜像；LLM/TTS 服务默认使用 `runtime: nvidia`，ASR/KWS 固定 CPU。
 - `chat2me-speech` 需要访问 `/dev/snd`、`/dev/bus/usb` 和宿主机 ALSA 配置。
 - `chat2me-relay` 通过挂载 `/dev` 到 `/host-dev` 查找 ESP32 或其他串口外设；不启动它不影响唤醒、收音、ASR/TTS 和对话。
 - LLM/TTS 在线模式不代表每次请求都先探测网络；服务会后台探活，请求使用最近缓存状态。

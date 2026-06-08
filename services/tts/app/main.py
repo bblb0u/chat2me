@@ -253,4 +253,4 @@ async def speak(request: SpeakRequest) -> Response:
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run(app, host=TTS_HOST, port=TTS_PORT)
+    uvicorn.run(app, host=TTS_HOST, port=TTS_PORT, access_log=False, log_level="warning")

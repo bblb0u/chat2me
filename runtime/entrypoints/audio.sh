@@ -323,7 +323,7 @@ try:
             check=True,
         )
 
-        requested, providers = provider_candidates("VOICE_KWS_PROVIDER", os.getenv("VOICE_KWS_PROVIDER", "auto"))
+        requested, providers = provider_candidates("VOICE_KWS_PROVIDER", os.getenv("VOICE_KWS_PROVIDER", "cpu"))
         cuda_error = None
         for provider in providers:
             try:
@@ -384,7 +384,7 @@ def create_recognizer(provider):
     )
 
 try:
-    requested, providers = provider_candidates("VOICE_ASR_DEVICE", os.getenv("VOICE_ASR_DEVICE", "auto"))
+    requested, providers = provider_candidates("VOICE_ASR_DEVICE", os.getenv("VOICE_ASR_DEVICE", "cpu"))
     cuda_error = None
     for provider in providers:
         try:
