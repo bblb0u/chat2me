@@ -489,11 +489,9 @@ class MeloTextToSpeech:
         self.config = SimpleNamespace(sample_rate=sample_rate)
 
     def synthesize_pcm(self, text: str) -> Iterable[bytes]:
-        if MELOTTS_LANGUAGE == "ZH":
-            text = re.sub(r"[A-Za-z_][A-Za-z0-9_.+-]*", "", text)
-            text = re.sub(r"\s+", "", text).strip()
-            if not text or not re.search(r"[\u4e00-\u9fff0-9]", text):
-                return
+        text = text.strip()
+        if not text:
+            return
         audio = self.model.tts_to_file(
             text,
             self.speaker_id,

@@ -107,13 +107,28 @@ text_init_text = text_init_text.replace(
 )
 text_init.write_text(text_init_text, encoding="utf-8")
 
+for filename, model_id in {
+    "english.py": "bert-base-uncased",
+    "chinese_mix.py": "bert-base-multilingual-uncased",
+}.items():
+    module = root / "melo" / "text" / filename
+    module_text = module.read_text(encoding="utf-8")
+    module_text = module_text.replace("from transformers import AutoTokenizer\n", "")
+    module_text = module_text.replace(
+        f"model_id = '{model_id}'\n"
+        "tokenizer = AutoTokenizer.from_pretrained(model_id)\n",
+        "class SimpleTokenizer:\n"
+        "    def tokenize(self, text):\n"
+        "        return re.findall(r\"[A-Za-z]+(?:'[A-Za-z]+)?|[0-9]+|[^\\s]\", text)\n"
+        "\n"
+        f"model_id = '{model_id}'\n"
+        "tokenizer = SimpleTokenizer()\n",
+    )
+    module.write_text(module_text, encoding="utf-8")
+
 api = root / "melo" / "api.py"
 api_text = api.read_text(encoding="utf-8")
 api_text = api_text.replace("from tqdm import tqdm\n", "")
-api_text = api_text.replace(
-    "        self.language = 'ZH_MIX_EN' if language == 'ZH' else language # we support a ZH_MIX_EN model\n",
-    "        self.language = language\n",
-)
 api_text = api_text.replace(
     "            if position:\n"
     "                tx = tqdm(texts, position=position)\n"

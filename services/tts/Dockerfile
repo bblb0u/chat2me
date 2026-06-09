@@ -70,7 +70,12 @@ RUN python3 -m pip install --no-cache-dir \
       "jinja2==3.1.4" \
       "networkx==3.1" \
       "sympy==1.12" \
-      "typing_extensions==4.13.2"
+      "typing_extensions==4.13.2" \
+    && python3 -m nltk.downloader \
+      -d /usr/local/share/nltk_data \
+      cmudict \
+      averaged_perceptron_tagger \
+      averaged_perceptron_tagger_eng
 
 COPY services/tts/install_melotts.sh /opt/chat2me-install-melotts.sh
 RUN chmod +x /opt/chat2me-install-melotts.sh \
