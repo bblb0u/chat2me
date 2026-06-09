@@ -8,16 +8,29 @@ download_file() {
   url="$1"
   target="$2"
   label="$3"
+  max_attempts="${CHAT2ME_DOWNLOAD_RETRIES:-10}"
+  attempt=1
   echo "downloading ${label}: ${url}"
-  curl -fL \
-    --retry "${CHAT2ME_DOWNLOAD_RETRIES:-10}" \
-    --retry-connrefused \
-    --connect-timeout 20 \
-    --speed-limit 1024 \
-    --speed-time 120 \
-    --show-error \
-    "$url" \
-    -o "$target"
+  while [ "$attempt" -le "$max_attempts" ]; do
+    if curl -fL \
+      --retry 3 \
+      --retry-connrefused \
+      --connect-timeout 20 \
+      --speed-limit 1024 \
+      --speed-time 120 \
+      --show-error \
+      "$url" \
+      -o "$target"; then
+      return 0
+    fi
+    rm -f "$target"
+    if [ "$attempt" -ge "$max_attempts" ]; then
+      return 1
+    fi
+    echo "retrying ${label} download (${attempt}/${max_attempts})" >&2
+    attempt=$((attempt + 1))
+    sleep 5
+  done
 }
 
 rm -rf /opt/MeloTTS /tmp/melotts-source

@@ -28,6 +28,18 @@ def env_float_compat(primary_key: str, fallback_key: str, default: str) -> float
         raise RuntimeError(f"{primary_key} must be a number in runtime.env") from None
 
 
+def env_bool_default(key: str, default: bool) -> bool:
+    value = os.getenv(key)
+    if value is None or not value.strip():
+        return default
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise RuntimeError(f"{key} must be a boolean in runtime.env")
+
+
 MODELS_DIR = Path(os.getenv("MODELS_DIR", "/models"))
 VOICE_KWS_MODEL = "sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20"
 VOICE_ASR_ENGINE = env_value("VOICE_ASR_ENGINE")
@@ -38,8 +50,6 @@ KWS_MODEL_DIR = MODELS_DIR / VOICE_KWS_MODEL
 ASR_MODEL_DIR = MODELS_DIR / VOICE_ASR_ENGINE / VOICE_ASR_MODEL
 GENERATED_KEYWORDS_FILE = MODELS_DIR / "wake_words.txt"
 GENERATED_KEYWORDS_RAW = MODELS_DIR / "wake_words_raw.txt"
-HOTWORDS_PATH = Path("/app/config/hotwords.yaml")
-GENERATED_HOTWORDS_FILE = MODELS_DIR / "hotwords"
 WAKE_WORDS_ENV = env_value("WAKE_WORDS")
 WAKE_WORDS = tuple(
     word.strip()
@@ -75,11 +85,10 @@ else:
         raise RuntimeError("AUDIO_INPUT_CHANNEL_INDEX must be an integer or auto in runtime.env") from None
 KWS_THREADS = env_int("KWS_THREADS")
 ASR_THREADS = env_int("ASR_THREADS")
-ASR_MODEL_PRECISION = env_value("ASR_MODEL_PRECISION")
-ASR_DECODING_METHOD = env_value("ASR_DECODING_METHOD")
-ASR_MAX_ACTIVE_PATHS = env_int("ASR_MAX_ACTIVE_PATHS")
-ASR_MODELING_UNIT = env_value("ASR_MODELING_UNIT")
-ASR_HOTWORDS_SCORE = env_float("ASR_HOTWORDS_SCORE")
+SENSEVOICE_LANGUAGE = os.getenv("SENSEVOICE_LANGUAGE", "auto").strip().lower() or "auto"
+if SENSEVOICE_LANGUAGE not in {"auto", "zh", "en", "ja", "ko", "yue"}:
+    raise RuntimeError("SENSEVOICE_LANGUAGE must be auto, zh, en, ja, ko, or yue in runtime.env")
+SENSEVOICE_USE_ITN = env_bool_default("SENSEVOICE_USE_ITN", True)
 CORE_REQUEST_TIMEOUT_SECONDS = env_float_compat("CORE_REQUEST_TIMEOUT_SECONDS", "GATEWAY_REQUEST_TIMEOUT_SECONDS", "30")
 CORE_UNAVAILABLE_RESPONSE = os.getenv("CORE_UNAVAILABLE_RESPONSE") or env_value("GATEWAY_UNAVAILABLE_RESPONSE")
 COMMAND_TIMEOUT_SECONDS = env_float("COMMAND_TIMEOUT_SECONDS")
@@ -143,9 +152,6 @@ if not SESSION_END_PHRASES:
     raise RuntimeError("SESSION_END_PHRASES must contain at least one phrase in runtime.env")
 KWS_KEYWORDS_SCORE = env_float("KWS_KEYWORDS_SCORE")
 KWS_KEYWORDS_THRESHOLD = env_float("KWS_KEYWORDS_THRESHOLD")
-ASR_RULE1_MIN_TRAILING_SILENCE = env_float("ASR_RULE1_MIN_TRAILING_SILENCE")
-ASR_RULE2_MIN_TRAILING_SILENCE = env_float("ASR_RULE2_MIN_TRAILING_SILENCE")
-ASR_RULE3_MIN_UTTERANCE_LENGTH = env_float("ASR_RULE3_MIN_UTTERANCE_LENGTH")
 LLM_ROUTE_CACHE = {
     "online": False,
     "route": "local",
@@ -269,76 +275,66 @@ def create_kws() -> Any:
     return spotter
 
 
-def asr_model_file(stem: str) -> Path:
-    precision = ASR_MODEL_PRECISION.strip().lower()
-    if precision in {"fp32", "float32", "full"}:
-        return ASR_MODEL_DIR / f"{stem}.onnx"
-    if precision in {"int8", "quantized"}:
-        return ASR_MODEL_DIR / f"{stem}.int8.onnx"
-    raise RuntimeError("ASR_MODEL_PRECISION must be fp32 or int8 in runtime.env")
+def sensevoice_model_file() -> Path:
+    model = ASR_MODEL_DIR / "model.int8.onnx"
+    if model.is_file():
+        return model
+    return ASR_MODEL_DIR / "model.onnx"
 
 
-def ensure_hotwords_file() -> str:
-    import sherpa_onnx
-    import yaml
-
-    if not HOTWORDS_PATH.is_file():
-        raise FileNotFoundError(f"missing hotwords file: {HOTWORDS_PATH}")
-
-    with HOTWORDS_PATH.open("r", encoding="utf-8") as file:
-        data = yaml.safe_load(file) or {}
-    if not isinstance(data, dict):
-        raise RuntimeError(f"hotwords file must be a YAML mapping: {HOTWORDS_PATH}")
-    raw_hotwords = data.get("hotwords", [])
-    if not isinstance(raw_hotwords, list):
-        raise RuntimeError(f"hotwords must be a YAML list: {HOTWORDS_PATH}")
-    hotwords = tuple(str(word).strip() for word in raw_hotwords if str(word).strip())
-    if not hotwords:
-        return ""
-
-    require_file(ASR_MODEL_DIR / "tokens.txt")
-    bpe_model = ASR_MODEL_DIR / "bpe.model"
-    bpe_model_arg = str(bpe_model) if bpe_model.is_file() else None
-    try:
-        tokenized = sherpa_onnx.text2token(
-            list(hotwords),
-            str(ASR_MODEL_DIR / "tokens.txt"),
-            tokens_type=ASR_MODELING_UNIT,
-            bpe_model=bpe_model_arg,
-        )
-    except Exception as exc:
-        raise RuntimeError(f"ASR hotword tokenization failed: {exc}") from exc
-
-    lines = [" ".join(str(token) for token in tokens) for tokens in tokenized if tokens]
-    if not lines:
-        return ""
-
-    GENERATED_HOTWORDS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    GENERATED_HOTWORDS_FILE.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    log(f"ASR hotwords active: {' / '.join(hotwords)}")
-    return str(GENERATED_HOTWORDS_FILE)
+def offline_result_text(result: Any) -> str:
+    text = getattr(result, "text", result)
+    return str(text or "").strip()
 
 
-class SherpaStreamingRecognizer:
+class SenseVoiceRecognizer:
     def __init__(self, recognizer: Any) -> None:
         self.recognizer = recognizer
 
-    def create_stream(self) -> Any:
-        return self.recognizer.create_stream()
+    def create_stream(self) -> dict[str, Any]:
+        return {
+            "chunks": [],
+            "sample_rate": None,
+            "finalized": False,
+            "text": "",
+        }
 
-    def accept_waveform(self, stream: Any, sample_rate: int, samples: np.ndarray) -> None:
-        stream.accept_waveform(sample_rate, samples)
+    def accept_waveform(self, stream: dict[str, Any], sample_rate: int, samples: np.ndarray) -> None:
+        if sample_rate != SAMPLE_RATE:
+            raise RuntimeError(f"SenseVoice ASR input must be {SAMPLE_RATE} Hz")
+        audio = np.asarray(samples, dtype=np.float32).reshape(-1)
+        if not audio.size:
+            return
+        previous_sample_rate = stream.get("sample_rate")
+        if previous_sample_rate is None:
+            stream["sample_rate"] = int(sample_rate)
+        elif int(previous_sample_rate) != int(sample_rate):
+            raise RuntimeError("SenseVoice ASR stream sample rate changed")
+        stream["chunks"].append(audio.copy())
 
-    def input_finished(self, stream: Any) -> None:
-        stream.input_finished()
+    def input_finished(self, stream: dict[str, Any]) -> None:
+        if stream.get("finalized"):
+            return
+        stream["finalized"] = True
+        chunks = stream.get("chunks") or []
+        if not chunks:
+            stream["text"] = ""
+            return
 
-    def decode_ready(self, stream: Any) -> str:
-        while self.recognizer.is_ready(stream):
-            self.recognizer.decode_stream(stream)
-        return str(self.recognizer.get_result(stream) or "").strip()
+        audio = np.concatenate(chunks).astype(np.float32, copy=False)
+        offline_stream = self.recognizer.create_stream()
+        try:
+            offline_stream.accept_waveform(int(stream.get("sample_rate") or SAMPLE_RATE), audio)
+            self.recognizer.decode_stream(offline_stream)
+            stream["text"] = offline_result_text(getattr(offline_stream, "result", ""))
+        finally:
+            del offline_stream
 
-    def is_endpoint(self, stream: Any) -> bool:
-        return bool(self.recognizer.is_endpoint(stream))
+    def decode_ready(self, stream: dict[str, Any]) -> str:
+        return str(stream.get("text") or "").strip()
+
+    def is_endpoint(self, stream: dict[str, Any]) -> bool:
+        return False
 
 
 class RemoteBatchRecognizer:
@@ -427,53 +423,37 @@ def transcribe_remote_audio(samples: np.ndarray, sample_rate: int) -> str:
     return str(payload.get("text") or "").strip()
 
 
-def create_sherpa_asr() -> StreamingRecognizer:
+def create_sensevoice_asr() -> StreamingRecognizer:
     import sherpa_onnx
 
     require_file(ASR_MODEL_DIR / "tokens.txt")
-    encoder = asr_model_file("encoder-epoch-99-avg-1")
-    decoder = asr_model_file("decoder-epoch-99-avg-1")
-    joiner = asr_model_file("joiner-epoch-99-avg-1")
-    require_file(encoder)
-    require_file(decoder)
-    require_file(joiner)
-    hotwords_file = ensure_hotwords_file()
-    bpe_vocab = ASR_MODEL_DIR / "bpe.vocab"
+    model = sensevoice_model_file()
+    require_file(model)
     log(
-        "ASR config: "
-        f"precision={ASR_MODEL_PRECISION} decoding={ASR_DECODING_METHOD} "
-        f"max_active_paths={ASR_MAX_ACTIVE_PATHS} hotwords={HOTWORDS_PATH} "
-        "provider=cpu"
+        "SenseVoice ASR config: "
+        f"model={ASR_MODEL_DIR} language={SENSEVOICE_LANGUAGE} "
+        f"use_itn={SENSEVOICE_USE_ITN} threads={ASR_THREADS} provider=cpu"
     )
 
-    recognizer = sherpa_onnx.OnlineRecognizer.from_transducer(
+    recognizer = sherpa_onnx.OfflineRecognizer.from_sense_voice(
         tokens=str(ASR_MODEL_DIR / "tokens.txt"),
-        encoder=str(encoder),
-        decoder=str(decoder),
-        joiner=str(joiner),
+        model=str(model),
         num_threads=ASR_THREADS,
         sample_rate=SAMPLE_RATE,
         feature_dim=80,
-        enable_endpoint_detection=True,
-        rule1_min_trailing_silence=ASR_RULE1_MIN_TRAILING_SILENCE,
-        rule2_min_trailing_silence=ASR_RULE2_MIN_TRAILING_SILENCE,
-        rule3_min_utterance_length=ASR_RULE3_MIN_UTTERANCE_LENGTH,
-        decoding_method=ASR_DECODING_METHOD,
-        max_active_paths=ASR_MAX_ACTIVE_PATHS,
-        hotwords_file=hotwords_file,
-        hotwords_score=ASR_HOTWORDS_SCORE,
-        modeling_unit=ASR_MODELING_UNIT,
-        bpe_vocab=str(bpe_vocab) if bpe_vocab.is_file() else "",
+        decoding_method="greedy_search",
+        language=SENSEVOICE_LANGUAGE,
+        use_itn=SENSEVOICE_USE_ITN,
         provider="cpu",
     )
-    log("Sherpa ASR loaded: provider=cpu")
-    return SherpaStreamingRecognizer(recognizer)
+    log("SenseVoice ASR loaded: provider=cpu")
+    return SenseVoiceRecognizer(recognizer)
 
 
 def create_asr() -> StreamingRecognizer:
-    if VOICE_ASR_ENGINE == "sherpa":
-        return create_sherpa_asr()
-    raise RuntimeError(f"VOICE_ASR_ENGINE '{VOICE_ASR_ENGINE}' is not supported")
+    if VOICE_ASR_ENGINE == "sensevoice":
+        return create_sensevoice_asr()
+    raise RuntimeError("only VOICE_ASR_ENGINE=sensevoice is supported")
 
 
 def create_remote_asr() -> StreamingRecognizer:

@@ -65,6 +65,9 @@ services:
 
   chat2me-asr:
     image: gitwarp.pages.dev/bblb0u/chat2me-asr:latest
+    build:
+      context: .
+      dockerfile: services/asr/Dockerfile
     container_name: chat2me-asr
     restart: unless-stopped
     command: ["python3", "-m", "app.main"]
@@ -83,6 +86,9 @@ services:
 
   chat2me-tts:
     image: gitwarp.pages.dev/bblb0u/chat2me-tts:latest
+    build:
+      context: .
+      dockerfile: services/tts/Dockerfile
     container_name: chat2me-tts
     restart: unless-stopped
     runtime: nvidia
@@ -105,6 +111,9 @@ services:
 
   chat2me-speech:
     image: gitwarp.pages.dev/bblb0u/chat2me-speech:latest
+    build:
+      context: .
+      dockerfile: services/speech/Dockerfile
     container_name: chat2me-speech
     restart: unless-stopped
     devices:

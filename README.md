@@ -2,7 +2,7 @@
 
 Chat2Me 是一套部署在机器人硬件上的中文语音交互系统，默认面向 NVIDIA Jetson / ARM64 平台。典型外设包括 ReSpeaker 麦克风阵列、ALSA 扬声器和 ESP32-S3 触摸屏。
 
-系统按职责拆分为唤醒、语音识别、对话编排、LLM、语音合成、声源方向和外设状态同步等服务，通过 Docker Compose 组合运行。LLM 支持本地 Ollama 和 OpenAI-compatible 在线服务；ASR 使用 Sherpa ONNX；TTS 支持本地 MeloTTS，也可以通过第三方 `edge-tts` 包调用 Microsoft Edge 在线语音服务，在线不可用时回落到本地模型。
+系统按职责拆分为唤醒、语音识别、对话编排、LLM、语音合成、声源方向和外设状态同步等服务，通过 Docker Compose 组合运行。LLM 支持本地 Ollama 和 OpenAI-compatible 在线服务；ASR 使用 Sherpa ONNX SenseVoice；TTS 支持本地 MeloTTS，也可以通过第三方 `edge-tts` 包调用 Microsoft Edge 在线语音服务，在线不可用时回落到本地模型。
 
 ## 硬件和平台
 
@@ -53,7 +53,7 @@ Compose 中实际运行 6 个容器：
 - `chat2me-llm`：LLM 网关和本地 Ollama。
 - `chat2me-core`：业务编排、固定问答、安全过滤、对外 `/chat`。
 - `chat2me-relay`：可选外设交互桥，主动读取 `chat2me-speech /state`，并转发状态、文本和动作提示等信号。
-- `chat2me-asr`：Sherpa ONNX ASR 服务。
+- `chat2me-asr`：Sherpa ONNX SenseVoice ASR 服务。
 - `chat2me-tts`：TTS 服务，支持在线优先、本地回落。
 - `chat2me-speech`：麦克风监听、唤醒、会话流程、播放和状态接口。
 
@@ -63,7 +63,7 @@ Compose 中实际运行 6 个容器：
 - Web/API：FastAPI、Uvicorn、Pydantic、httpx；语音主循环和状态服务使用 `http.server`。
 - 本地 LLM：Ollama，默认 `qwen3:4b-instruct`。
 - 在线模型接口：OpenAI-compatible HTTP 接口。
-- ASR：Sherpa ONNX streaming ASR。
+- ASR：Sherpa ONNX 离线 SenseVoice ASR。
 - TTS：本地 MeloTTS；在线模式通过第三方 `edge-tts` 包调用 Microsoft Edge 在线语音服务。
 - 音频：sounddevice、ALSA `aplay`、ffmpeg、PyUSB、ReSpeaker USB tuning/DOA。
 - 容器：Docker Compose、Docker Hub ARM64 镜像、GitHub Actions Buildx 发布。
@@ -84,7 +84,6 @@ docker compose run --rm --no-deps chat2me-core true
 vim data/config/runtime.env
 vim data/config/profile.yaml
 vim data/config/safety.yaml
-vim data/config/hotwords.yaml
 ```
 
 启动文字对话链路：
@@ -152,8 +151,10 @@ OLLAMA_MODEL=qwen3:4b-instruct
 默认本地 ASR/TTS：
 
 ```env
-VOICE_ASR_ENGINE=sherpa
-VOICE_ASR_MODEL=sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20
+VOICE_ASR_ENGINE=sensevoice
+VOICE_ASR_MODEL=sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09
+SENSEVOICE_LANGUAGE=auto
+SENSEVOICE_USE_ITN=1
 VOICE_TTS_ENGINE=melotts
 VOICE_TTS_MODEL=MeloTTS-Chinese
 VOICE_TTS_DEVICE=auto
@@ -162,7 +163,7 @@ MELOTTS_SPEAKER=ZH
 MELOTTS_DISABLE_BERT=1
 ```
 
-Sherpa ONNX 的 KWS/ASR 使用 CPU 运行。MeloTTS 使用 PyTorch device，默认 `auto`，支持 `auto/cpu/cuda/gpu/cuda:<index>`。
+Sherpa ONNX 的 KWS 和 SenseVoice ASR 使用 CPU 运行。MeloTTS 使用 PyTorch device，默认 `auto`，支持 `auto/cpu/cuda/gpu/cuda:<index>`。
 
 在线 TTS，失败时回落本地：
 
@@ -201,7 +202,7 @@ EDGE_TTS_PROXY=
 
 - `profile.yaml`：机器人名称、公司、人设、固定事实、固定问答、系统提示词。
 - `safety.yaml`：输入/输出敏感关键词和阻断回复。
-- `hotwords.yaml`：ASR 热词，提高特定中文词识别概率。
+- `hotwords.yaml`：旧版 ASR 热词配置；SenseVoice ASR 当前不读取。
 
 ## 运行流程
 
@@ -233,7 +234,7 @@ EDGE_TTS_PROXY=
 
 `chat2me-asr` 和 `chat2me-tts` 独立运行：
 
-- `chat2me-asr` 启动时创建 Sherpa ONNX 识别实例。
+- `chat2me-asr` 启动时创建 Sherpa ONNX SenseVoice 识别实例。
 - `chat2me-tts` 启动时创建本地 TTS；配置 `VOICE_TTS_ENGINE=online` 时同时创建在线实例并后台探活。
 - TTS 请求优先使用调用方传入的 `online_available` 缓存值，避免每次请求阻塞在探活流程。
 - 在线 TTS 请求失败会自动回落到本地 `melotts/MeloTTS-Chinese`。
@@ -319,11 +320,11 @@ PY
 | 文件 | 作用 |
 | --- | --- |
 | `README.md` | 项目说明文档。 |
-| `docker-compose.yml` | 定义 LLM、Core、Relay、ASR、TTS、Speech 六个服务及设备/卷/健康检查。 |
+| `docker-compose.yml` | 定义 LLM、Core、Relay、ASR、TTS、Speech 六个服务及设备/卷/健康检查；语音镜像支持本地 build。 |
 | `config/runtime.env` | 默认运行配置模板。 |
 | `config/profile.yaml` | 默认机器人身份、固定问答和系统提示词。 |
 | `config/safety.yaml` | 默认敏感关键词与阻断回复。 |
-| `config/hotwords.yaml` | 默认 ASR 热词。 |
+| `config/hotwords.yaml` | 旧版 ASR 热词配置；SenseVoice ASR 当前不读取。 |
 | `.env.example` | 全量运行环境变量参考。 |
 | `.dockerignore` | Docker build 时忽略无关文件。 |
 | `.gitignore` | Git 忽略规则。 |
@@ -349,7 +350,7 @@ PY
 
 | 文件 | 作用 |
 | --- | --- |
-| `services/asr/Dockerfile` | 构建 ASR 镜像，默认 `VOICE_ROLE=chat2me-asr`，安装 Sherpa ASR 服务和 WAV 上传接口所需依赖。 |
+| `services/asr/Dockerfile` | 构建 ASR 镜像，默认 `VOICE_ROLE=chat2me-asr`，安装 Sherpa ONNX SenseVoice ASR 服务和 WAV 上传接口所需依赖。 |
 | `services/asr/requirements.txt` | ASR 服务基础 Python 依赖。 |
 | `services/asr/app/main.py` | ASR FastAPI 服务入口：WAV 上传、本地识别和 reachability。 |
 
@@ -425,7 +426,7 @@ PY
 
 ASR：
 
-- `sherpa`：`sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20`
+- `sensevoice`：`sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09`
 
 TTS：
 

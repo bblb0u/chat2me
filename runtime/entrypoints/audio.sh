@@ -205,22 +205,22 @@ resolve_kws_model() {
 }
 
 resolve_asr_model() {
-  VOICE_ASR_ENGINE="$(normalize_key "${VOICE_ASR_ENGINE:-sherpa}")"
+  VOICE_ASR_ENGINE="$(normalize_key "${VOICE_ASR_ENGINE:-sensevoice}")"
   case "$VOICE_ASR_ENGINE" in
-    sherpa)
-      VOICE_ASR_ENGINE="sherpa"
-      VOICE_ASR_MODEL="${VOICE_ASR_MODEL:-sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20}"
+    sensevoice)
+      VOICE_ASR_ENGINE="sensevoice"
+      VOICE_ASR_MODEL="${VOICE_ASR_MODEL:-sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09}"
       case "$VOICE_ASR_MODEL" in
-        sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20)
-          ASR_MODEL_URL="https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20.tar.bz2"
+        sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09)
+          ASR_MODEL_URL="https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09.tar.bz2"
           ;;
         *)
-          known_value_error "VOICE_ASR_MODEL" "$VOICE_ASR_MODEL" "sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20"
+          known_value_error "VOICE_ASR_MODEL" "$VOICE_ASR_MODEL" "sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09"
           ;;
       esac
       ;;
     *)
-      known_value_error "VOICE_ASR_ENGINE" "$VOICE_ASR_ENGINE" "sherpa"
+      known_value_error "VOICE_ASR_ENGINE" "$VOICE_ASR_ENGINE" "sensevoice"
       ;;
   esac
 }
@@ -362,30 +362,41 @@ PY
 }
 
 asr_runtime_ok() {
-  python3 - "$ASR_MODEL" "$AUDIO_SAMPLE_RATE" "${ASR_MODEL_PRECISION:-fp32}" "${ASR_DECODING_METHOD:-modified_beam_search}" "${ASR_MAX_ACTIVE_PATHS:-8}" <<'PY'
+  python3 - "$ASR_MODEL" "$AUDIO_SAMPLE_RATE" "${SENSEVOICE_LANGUAGE:-auto}" "${SENSEVOICE_USE_ITN:-1}" <<'PY'
 import sys
+from pathlib import Path
 import sherpa_onnx
 
 model_dir = sys.argv[1]
 sample_rate = int(sys.argv[2])
-precision = sys.argv[3].strip().lower()
-decoding_method = sys.argv[4]
-max_active_paths = int(sys.argv[5])
-suffix = ".int8.onnx" if precision in {"int8", "quantized"} else ".onnx"
+language = sys.argv[3].strip().lower() or "auto"
+use_itn_value = sys.argv[4].strip().lower()
+if language not in {"auto", "zh", "en", "ja", "ko", "yue"}:
+    print(f"Invalid SENSEVOICE_LANGUAGE: {language}", file=sys.stderr)
+    sys.exit(1)
+if use_itn_value in {"1", "true", "yes", "on"}:
+    use_itn = True
+elif use_itn_value in {"0", "false", "no", "off"}:
+    use_itn = False
+else:
+    print(f"Invalid SENSEVOICE_USE_ITN: {use_itn_value}", file=sys.stderr)
+    sys.exit(1)
+
+model_path = Path(model_dir) / "model.int8.onnx"
+if not model_path.is_file():
+    model_path = Path(model_dir) / "model.onnx"
 
 
 def create_recognizer():
-    return sherpa_onnx.OnlineRecognizer.from_transducer(
+    return sherpa_onnx.OfflineRecognizer.from_sense_voice(
         tokens=f"{model_dir}/tokens.txt",
-        encoder=f"{model_dir}/encoder-epoch-99-avg-1{suffix}",
-        decoder=f"{model_dir}/decoder-epoch-99-avg-1{suffix}",
-        joiner=f"{model_dir}/joiner-epoch-99-avg-1{suffix}",
+        model=str(model_path),
         num_threads=1,
         sample_rate=sample_rate,
         feature_dim=80,
-        enable_endpoint_detection=True,
-        decoding_method=decoding_method,
-        max_active_paths=max_active_paths,
+        decoding_method="greedy_search",
+        language=language,
+        use_itn=use_itn,
         provider="cpu",
     )
 
@@ -408,17 +419,13 @@ kws_model_ok() {
 }
 
 asr_model_ok() {
-  case "${ASR_MODEL_PRECISION:-fp32}" in
-    int8|quantized) asr_suffix=".int8.onnx" ;;
-    fp32|float32|full) asr_suffix=".onnx" ;;
-    *) echo "ASR_MODEL_PRECISION must be fp32 or int8" >&2; return 1 ;;
-  esac
   required_files_ok \
-    "$ASR_MODEL/tokens.txt" \
-    "$ASR_MODEL/encoder-epoch-99-avg-1$asr_suffix" \
-    "$ASR_MODEL/decoder-epoch-99-avg-1$asr_suffix" \
-    "$ASR_MODEL/joiner-epoch-99-avg-1$asr_suffix" \
-    && asr_runtime_ok
+    "$ASR_MODEL/tokens.txt" || return 1
+  if [ ! -s "$ASR_MODEL/model.int8.onnx" ] && [ ! -s "$ASR_MODEL/model.onnx" ]; then
+    echo "Missing or empty model file: $ASR_MODEL/model.int8.onnx" >&2
+    return 1
+  fi
+  asr_runtime_ok
 }
 
 melotts_runtime_ok() {
@@ -492,12 +499,12 @@ require_command() {
 
 ensure_kws_runtime() {
   require_python_module sherpa_onnx
+  require_python_module pypinyin
   require_command sherpa-onnx-cli
 }
 
-ensure_sherpa_asr_runtime() {
-  ensure_kws_runtime
-  require_python_module pypinyin
+ensure_sensevoice_asr_runtime() {
+  require_python_module sherpa_onnx
 }
 
 ensure_melotts_runtime() {
@@ -519,7 +526,7 @@ ensure_selected_runtimes() {
 
   if model_selected speech || model_selected asr-service; then
     case "$VOICE_ASR_ENGINE" in
-      sherpa) ensure_sherpa_asr_runtime ;;
+      sensevoice) ensure_sensevoice_asr_runtime ;;
     esac
   fi
 
@@ -826,7 +833,7 @@ restore_runtime_model_selection() {
 MODEL_SET="$(default_voice_model_set)"
 if model_selected speech || model_selected asr-service; then
   case "$VOICE_ASR_ENGINE" in
-    sherpa) MODEL_SET="$MODEL_SET,asr" ;;
+    sensevoice) MODEL_SET="$MODEL_SET,asr" ;;
   esac
 fi
 if model_selected speech || model_selected tts-service; then
