@@ -128,13 +128,14 @@ print_progress() {
 }
 
 pull_model_with_progress() {
+  pull_target_model="$1"
   fifo="/tmp/ollama-pull.$$"
   rm -f "$fifo"
   mkfifo "$fifo"
 
   curl -fsS -N \
     -H "Content-Type: application/json" \
-    -d "{\"name\":\"$MODEL\",\"stream\":true}" \
+    -d "{\"name\":\"$pull_target_model\",\"stream\":true}" \
     http://127.0.0.1:11434/api/pull >"$fifo" &
   curl_pid="$!"
 
@@ -158,11 +159,11 @@ pull_model_with_progress() {
       bucket=$((pct / 5 * 5))
       key="${digest:-blob}:$bucket"
       if [ "$key" != "$last_key" ] || [ "$pct" -eq 100 ]; then
-        print_progress "$MODEL" "$completed" "$total" "$status"
+        print_progress "$pull_target_model" "$completed" "$total" "$status"
         last_key="$key"
       fi
     elif [ -n "$status" ]; then
-      echo "[llm] $MODEL: $status"
+      echo "[llm] $pull_target_model: $status"
     fi
   done <"$fifo"
 
@@ -191,36 +192,36 @@ load_runtime_env
 OLLAMA_LOG_FILE="/app/log/$VOICE_ROLE.log"
 mkdir -p "$(dirname "$OLLAMA_LOG_FILE")"
 : "${OLLAMA_MODEL:?OLLAMA_MODEL must be set in runtime.env}"
-MODEL="$OLLAMA_MODEL"
 
 model_ok() {
-  /bin/ollama show "$MODEL" >/dev/null 2>&1 \
-    && /bin/ollama run "$MODEL" "只回答OK" >/dev/null 2>&1
+  check_target_model="$1"
+  /bin/ollama show "$check_target_model" >/dev/null 2>&1 \
+    && /bin/ollama run "$check_target_model" "只回答OK" >/dev/null 2>&1
 }
 
 ensure_model_ready() {
-  MODEL="$1"
+  ensure_target_model="$1"
   label="$2"
 
-  echo "[llm] validating $label: $MODEL"
-  if model_ok; then
-    echo "$MODEL is ready"
+  echo "[llm] validating $label: $ensure_target_model"
+  if model_ok "$ensure_target_model"; then
+    echo "$ensure_target_model is ready"
     return 0
   fi
 
-  echo "$MODEL is missing or invalid; re-downloading"
-  /bin/ollama rm "$MODEL" >/dev/null 2>&1 || true
+  echo "$ensure_target_model is missing or invalid; re-downloading"
+  /bin/ollama rm "$ensure_target_model" >/dev/null 2>&1 || true
 
-  until pull_model_with_progress; do
-    echo "Retrying Ollama model pull: $MODEL"
+  until pull_model_with_progress "$ensure_target_model"; do
+    echo "Retrying Ollama model pull: $ensure_target_model"
     sleep 30
   done
 
-  echo "[llm] validating model after download: $MODEL"
-  if model_ok; then
-    echo "$MODEL is ready"
+  echo "[llm] validating model after download: $ensure_target_model"
+  if model_ok "$ensure_target_model"; then
+    echo "$ensure_target_model is ready"
   else
-    echo "$MODEL was downloaded but failed runtime validation" >&2
+    echo "$ensure_target_model was downloaded but failed runtime validation" >&2
     print_ollama_log_tail
   fi
 }
