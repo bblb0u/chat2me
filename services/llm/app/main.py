@@ -94,6 +94,11 @@ LLM_REACHABILITY_INTERVAL_SECONDS = 5.0
 LLM_REACHABILITY_TIMEOUT_SECONDS = 1.5
 OLLAMA_NUM_CTX = env_int("OLLAMA_NUM_CTX")
 OLLAMA_NUM_THREAD = env_int("OLLAMA_NUM_THREAD")
+INTENT_MODEL = env_value("INTENT_MODEL", allow_empty=True, default="")
+INTENT_MAX_TOKENS = env_int("INTENT_MAX_TOKENS", default="48")
+INTENT_NUM_CTX = env_int("INTENT_NUM_CTX", default="2048")
+INTENT_TEMPERATURE = env_float("INTENT_TEMPERATURE", default="0")
+INTENT_TIMEOUT_SECONDS = env_float("INTENT_TIMEOUT_SECONDS", default="15")
 EMPTY_ANSWER_RESPONSE = env_value("EMPTY_ANSWER_RESPONSE")
 SYSTEM_PROMPT = os.getenv("LLM_SYSTEM_PROMPT", "").strip()
 
@@ -101,6 +106,11 @@ SYSTEM_PROMPT = os.getenv("LLM_SYSTEM_PROMPT", "").strip()
 class ChatRequest(BaseModel):
     message: str = Field(..., min_length=1, max_length=2000)
     system_prompt: str | None = None
+
+
+class IntentRequest(BaseModel):
+    message: str = Field(..., min_length=1, max_length=2000)
+    system_prompt: str = Field(..., min_length=1)
 
 
 class ChatResponse(BaseModel):
@@ -128,6 +138,13 @@ class ReachabilityResponse(BaseModel):
     model: str | None
     status: str
     checked_at: float | None = None
+
+
+class IntentResponse(BaseModel):
+    content: str
+    route: str
+    model: str
+    latency_ms: int
 
 
 class LLMConfigError(Exception):
@@ -217,6 +234,10 @@ def require_local_model() -> str:
     return OLLAMA_MODEL
 
 
+def intent_model() -> str:
+    return INTENT_MODEL or require_local_model()
+
+
 def online_uses_responses_api() -> bool:
     return LLM_BASE_URL.endswith(RESPONSES_PATH)
 
@@ -287,21 +308,31 @@ def strip_thinking(text: str) -> str:
     return cleaned.strip()
 
 
-async def call_ollama(message: str, model: str, system_prompt: str | None = None) -> str:
+async def call_ollama_with_options(
+    message: str,
+    model: str,
+    system_prompt: str | None = None,
+    *,
+    temperature: float,
+    top_p: float,
+    max_tokens: int,
+    num_ctx: int,
+    timeout_seconds: float,
+) -> str:
     payload = {
         "model": model,
         "messages": chat_messages(message, system_prompt),
         "stream": False,
         "think": False,
         "options": {
-            "num_ctx": OLLAMA_NUM_CTX,
-            "temperature": LLM_TEMPERATURE,
-            "top_p": LLM_TOP_P,
-            "num_predict": LLM_MAX_TOKENS,
+            "num_ctx": num_ctx,
+            "temperature": temperature,
+            "top_p": top_p,
+            "num_predict": max_tokens,
             "num_thread": OLLAMA_NUM_THREAD,
         },
     }
-    timeout = httpx.Timeout(connect=LLM_CONNECT_TIMEOUT_SECONDS, read=LLM_TIMEOUT_SECONDS, write=10.0, pool=5.0)
+    timeout = httpx.Timeout(connect=LLM_CONNECT_TIMEOUT_SECONDS, read=timeout_seconds, write=10.0, pool=5.0)
     async with httpx.AsyncClient(timeout=timeout) as client:
         response = await client.post(f"{OLLAMA_BASE_URL}/api/chat", json=payload)
         response.raise_for_status()
@@ -309,6 +340,34 @@ async def call_ollama(message: str, model: str, system_prompt: str | None = None
     message_data = data.get("message") or {}
     answer = message_data.get("content") or data.get("response") or ""
     return strip_thinking(str(answer))
+
+
+async def call_ollama(message: str, model: str, system_prompt: str | None = None) -> str:
+    return await call_ollama_with_options(
+        message,
+        model,
+        system_prompt,
+        temperature=LLM_TEMPERATURE,
+        top_p=LLM_TOP_P,
+        max_tokens=LLM_MAX_TOKENS,
+        num_ctx=OLLAMA_NUM_CTX,
+        timeout_seconds=LLM_TIMEOUT_SECONDS,
+    )
+
+
+async def call_intent_classifier(message: str, system_prompt: str) -> tuple[str, str]:
+    model = intent_model()
+    content = await call_ollama_with_options(
+        message,
+        model,
+        system_prompt,
+        temperature=INTENT_TEMPERATURE,
+        top_p=1.0,
+        max_tokens=INTENT_MAX_TOKENS,
+        num_ctx=INTENT_NUM_CTX,
+        timeout_seconds=INTENT_TIMEOUT_SECONDS,
+    )
+    return content, model
 
 
 async def call_online_llm(message: str, system_prompt: str | None = None) -> str:
@@ -523,4 +582,26 @@ async def chat(request: ChatRequest) -> ChatResponse:
         latency_ms=int((time.perf_counter() - started_at) * 1000),
         fallback=result.fallback,
         online_status=result.online_status,
+    )
+
+
+@app.post("/intent", response_model=IntentResponse)
+async def intent(request: IntentRequest) -> IntentResponse:
+    started_at = time.perf_counter()
+    try:
+        content, model = await call_intent_classifier(request.message.strip(), request.system_prompt)
+    except LLMConfigError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(status_code=502, detail=short_detail(exc.response.text)) from exc
+    except httpx.ReadTimeout as exc:
+        raise HTTPException(status_code=504, detail="意图理解超时。") from exc
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail=f"本地意图模型不可用：{exc}") from exc
+
+    return IntentResponse(
+        content=content,
+        route="local_intent",
+        model=model,
+        latency_ms=int((time.perf_counter() - started_at) * 1000),
     )

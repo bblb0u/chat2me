@@ -136,6 +136,7 @@ CHAT2ME_CONSOLE_LOG_LEVEL=warning
 ```env
 LLM_PROVIDER=ollama
 OLLAMA_MODEL=qwen3:4b-instruct
+INTENT_CLASSIFIER_ENABLED=1
 ```
 
 在线 LLM，失败回落本地 Ollama：
@@ -206,7 +207,7 @@ EDGE_TTS_PROXY=
 
 角色、固定问答、安全策略和 ASR 词库：
 
-- `profile.yaml`：机器人名称、公司、人设、固定事实、固定问答、系统提示词。
+- `profile.yaml`：机器人名称、公司、人设、固定事实、固定问答、意图目录、系统提示词。固定问答建议维护稳定的 `id` 和 `intent`，Core 会把它们交给本地意图分类器，并用返回的 `fixed_qa_id` 映射到标准答案。
 - `safety.yaml`：输入/输出敏感关键词和阻断回复。
 - `homophones.yaml`：ASR 同音替换词库。容器启动时读取 `rules[*].target`，转换成拼音规则并生成 `/models/homophone/replace.fst`；SenseVoice 识别后会用该 FST 把同音识别结果替换成目标专有词。它只改 ASR 输出文本，不负责固定问答匹配或安全判断。
 
@@ -227,8 +228,9 @@ EDGE_TTS_PROXY=
 1. 加载 `runtime.env`、`profile.yaml`、`safety.yaml`。
 2. 输入命中 `blocked_keywords` 时直接返回阻断回复。
 3. 对用户文本做标点/空白/唤醒词归一化，优先匹配 `fixed_qa`。
-4. 未命中固定问答时，把用户问题和 `system_prompt` 转发给 `chat2me-llm`。
-5. 对 LLM 输出再做一次安全过滤。
+4. 未命中固定问答时，读取 `profile.yaml` 的 `intent_router` 和 `fixed_qa[*].id/intent`，调用本地意图分类。
+5. 意图命中方向、退下、固定问答或敏感请求时，由 Core 执行固定动作；不命中时才把用户问题和 `system_prompt` 转发给 `chat2me-llm`。
+6. 对 LLM 输出再做一次安全过滤。
 
 `chat2me-llm` 负责在线 LLM 与本地 Ollama 的路由：
 
@@ -236,6 +238,7 @@ EDGE_TTS_PROXY=
 - `LLM_PROVIDER=online` 时，后台周期访问 reachability 接口。
 - 在线可用时调用在线模型，不可用或请求失败时回落 `OLLAMA_MODEL`。
 - 支持 OpenAI Chat Completions 风格响应，也兼容 Responses API 的 `output_text/output` 字段。
+- `/intent` 固定使用本地 Ollama，只输出短 JSON 给 Core 做路由，不受 `LLM_PROVIDER=online` 影响。
 
 `chat2me-asr` 和 `chat2me-tts` 独立运行：
 
@@ -269,6 +272,7 @@ ESP32 显示固件通过 USB Serial/JTAG 从标准输入读取一行 JSON：
 - `GET /health`
 - `GET /llm/reachability`
 - `POST /chat`
+- `POST /intent`
 
 `chat2me-asr`：
 
@@ -325,9 +329,9 @@ PY
 | 文件 | 作用 |
 | --- | --- |
 | `README.md` | 项目说明文档。 |
-| `docker-compose.yml` | 定义 LLM、Core、Relay、ASR、TTS、Speech 六个服务及设备/卷/健康检查；语音镜像支持本地 build。 |
+| `docker-compose.yml` | 定义 LLM、Core、Relay、ASR、TTS、Speech 六个服务及设备/卷/健康检查；运行侧只拉取远端镜像，镜像构建由 GitHub Actions 完成。 |
 | `config/runtime.env` | 默认运行配置模板。 |
-| `config/profile.yaml` | 默认机器人身份、固定问答和系统提示词。 |
+| `config/profile.yaml` | 默认机器人身份、固定问答、意图目录和系统提示词。 |
 | `config/safety.yaml` | 默认敏感关键词与阻断回复。 |
 | `config/homophones.yaml` | SenseVoice homophone replacer 中文词库；启动时生成 `/models/homophone/replace.fst`。 |
 | `.env.example` | 全量运行环境变量参考。 |

@@ -1064,7 +1064,7 @@ def listen_command(
     return final_text
 
 
-def ask_core(text: str) -> str:
+def ask_core(text: str) -> dict[str, Any]:
     import httpx
 
     payload: dict[str, Any] = {"message": text}
@@ -1072,7 +1072,7 @@ def ask_core(text: str) -> str:
         response = client.post(CORE_URL, json=payload)
         response.raise_for_status()
         data: dict[str, Any] = response.json()
-    return str(data.get("answer", "")).strip()
+    return data
 
 
 def is_session_end(command: str) -> bool:
@@ -1096,16 +1096,22 @@ def handle_conversation_turn(
     log(f"recognized command: {command}")
     display.set_state("thinking", command)
     try:
-        answer = ask_core(command)
+        core_result = ask_core(command)
     except Exception as exc:
         log(f"core request failed: {exc}", level="warning")
         display.set_state("error", "core unavailable")
         speak_pausing_input(audio, CORE_UNAVAILABLE_RESPONSE, voice, tts_config, display)
         return True
 
+    answer = str(core_result.get("answer", "")).strip()
+    route = str(core_result.get("route", "")).strip()
     log(f"answer: {answer}")
     speech_answer = spoken_text(answer)
     if speech_answer != answer:
         log(f"answer shortened for speech: {speech_answer}")
     speak_pausing_input(audio, speech_answer, voice, tts_config, display)
+    if route == "session_end":
+        log("session ended by core intent route")
+        display.set_state("idle")
+        return False
     return True
