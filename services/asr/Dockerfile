@@ -17,6 +17,7 @@ WORKDIR /app
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
+       bzip2 \
        ca-certificates \
        curl \
        libgomp1 \
@@ -31,11 +32,21 @@ RUN python3 -m pip install --no-cache-dir \
       --timeout "$CHAT2ME_PIP_TIMEOUT" \
       -r requirements.txt
 
+ENV MAMBA_ROOT_PREFIX=/opt/micromamba \
+    ASR_HOMOPHONE_GENERATOR_PYTHON=/opt/homophone-fst/bin/python
+
+RUN curl -fsSL https://micro.mamba.pm/api/micromamba/linux-aarch64/latest -o /tmp/micromamba.tar.bz2 \
+    && tar -xjf /tmp/micromamba.tar.bz2 -C /usr/local/bin --strip-components=1 bin/micromamba \
+    && micromamba create -y -p /opt/homophone-fst -c conda-forge python=3.12 pynini pyyaml pypinyin \
+    && micromamba clean -a -y \
+    && rm -f /tmp/micromamba.tar.bz2
+
 COPY config /defaults/config
 COPY runtime/entrypoints/audio.sh /entrypoint.sh
 COPY runtime/shared/common.py ./app/common.py
 COPY runtime/shared/voice.py ./app/voice.py
 COPY services/asr/app/main.py ./app/main.py
+COPY runtime/tools/homophone.py ./runtime/tools/homophone.py
 RUN chmod +x /entrypoint.sh
 
 ENTRYPOINT ["/entrypoint.sh"]

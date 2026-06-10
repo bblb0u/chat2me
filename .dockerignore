@@ -1,16 +1,33 @@
-.git
-.agents
-.codex
-__pycache__
-*.pyc
-.pytest_cache
-.venv
-venv
-data
-ollama-data
-models
-tools
-vendor
-firmware/display/build
-firmware/display/managed_components
-firmware/display/sdkconfig
+# VCS and local tooling state
+/.git
+/.github
+/.agents
+/.codex
+
+# Python caches and test artifacts
+**/__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Local Python environments
+/.venv
+/venv
+
+# Local env files. Keep .env.example available if copied explicitly later.
+/.env
+/.env.*
+!/.env.example
+
+# Runtime data mounted by docker-compose.yml
+/data
+
+# ESP-IDF display firmware build outputs
+/firmware/display/build
+/firmware/display/managed_components
+/firmware/display/sdkconfig
+/firmware/display/sdkconfig.old

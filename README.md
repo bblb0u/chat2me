@@ -155,6 +155,12 @@ VOICE_ASR_ENGINE=sensevoice
 VOICE_ASR_MODEL=sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09
 SENSEVOICE_LANGUAGE=auto
 SENSEVOICE_USE_ITN=1
+ASR_HOMOPHONE_REPLACER_ENABLED=1
+ASR_HOMOPHONE_GENERATE_ON_START=1
+ASR_HOMOPHONE_CONFIG_PATH=/app/config/homophones.yaml
+ASR_HOMOPHONE_GENERATOR_PYTHON=/opt/homophone-fst/bin/python
+ASR_HOMOPHONE_LEXICON=/models/homophone/lexicon.txt
+ASR_HOMOPHONE_RULE_FSTS=/models/homophone/replace.fst
 VOICE_TTS_ENGINE=melotts
 VOICE_TTS_MODEL=MeloTTS-Chinese
 VOICE_TTS_DEVICE=auto
@@ -163,7 +169,7 @@ MELOTTS_SPEAKER=ZH
 MELOTTS_DISABLE_BERT=1
 ```
 
-Sherpa ONNX 的 KWS 和 SenseVoice ASR 使用 CPU 运行。MeloTTS 使用 PyTorch device，默认 `auto`，支持 `auto/cpu/cuda/gpu/cuda:<index>`。
+Sherpa ONNX 的 KWS 和 SenseVoice ASR 使用 CPU 运行。SenseVoice 可启用 homophone replacer，在 ASR 输出后把同音识别结果替换成专有词；ASR 镜像内置 Pynini/OpenFST 生成环境，启动时读取中文 `homophones.yaml`，自动转拼音并生成 `/models/homophone/replace.fst`。生成失败会阻止 ASR 容器启动。MeloTTS 使用 PyTorch device，默认 `auto`，支持 `auto/cpu/cuda/gpu/cuda:<index>`。
 
 在线 TTS，失败时回落本地：
 
@@ -198,11 +204,11 @@ EDGE_TTS_PROXY=
 | `zh-TW-HsiaoYuNeural` | 台湾国语女声 |
 | `zh-TW-YunJheNeural` | 台湾国语男声 |
 
-角色、固定问答和安全策略：
+角色、固定问答、安全策略和 ASR 词库：
 
 - `profile.yaml`：机器人名称、公司、人设、固定事实、固定问答、系统提示词。
 - `safety.yaml`：输入/输出敏感关键词和阻断回复。
-- `hotwords.yaml`：旧版 ASR 热词配置；SenseVoice ASR 当前不读取。
+- `homophones.yaml`：ASR 同音替换词库。容器启动时读取 `rules[*].target`，转换成拼音规则并生成 `/models/homophone/replace.fst`；SenseVoice 识别后会用该 FST 把同音识别结果替换成目标专有词。它只改 ASR 输出文本，不负责固定问答匹配或安全判断。
 
 ## 运行流程
 
@@ -324,7 +330,7 @@ PY
 | `config/runtime.env` | 默认运行配置模板。 |
 | `config/profile.yaml` | 默认机器人身份、固定问答和系统提示词。 |
 | `config/safety.yaml` | 默认敏感关键词与阻断回复。 |
-| `config/hotwords.yaml` | 旧版 ASR 热词配置；SenseVoice ASR 当前不读取。 |
+| `config/homophones.yaml` | SenseVoice homophone replacer 中文词库；启动时生成 `/models/homophone/replace.fst`。 |
 | `.env.example` | 全量运行环境变量参考。 |
 | `.dockerignore` | Docker build 时忽略无关文件。 |
 | `.gitignore` | Git 忽略规则。 |

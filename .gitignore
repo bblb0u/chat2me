@@ -1,12 +1,31 @@
-__pycache__/
-*.pyc
+# Python service caches
+**/__pycache__/
+*.py[cod]
+*$py.class
 .pytest_cache/
-.venv/
-venv/
-.agents/
-.codex/
-data/
-ollama-data/
-models/
-tools/
-vendor/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Local Python environments
+/.venv/
+/venv/
+
+# Local env files. Tracked defaults live under config/ and .env.example.
+/.env
+/.env.*
+!/.env.example
+
+# Local agent state
+/.agents/
+/.codex/
+
+# Runtime data mounted by docker-compose.yml
+/data/
+
+# ESP-IDF display firmware build outputs
+/firmware/display/build/
+/firmware/display/managed_components/
+/firmware/display/sdkconfig
+/firmware/display/sdkconfig.old

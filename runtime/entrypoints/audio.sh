@@ -256,6 +256,25 @@ resolve_tts_model() {
   esac
 }
 
+resolve_homophone_replacer() {
+  ASR_HOMOPHONE_REPLACER_ENABLED="${ASR_HOMOPHONE_REPLACER_ENABLED:-1}"
+  ASR_HOMOPHONE_GENERATE_ON_START="${ASR_HOMOPHONE_GENERATE_ON_START:-1}"
+  ASR_HOMOPHONE_CONFIG_PATH="${ASR_HOMOPHONE_CONFIG_PATH:-$CONFIG_DIR/homophones.yaml}"
+  ASR_HOMOPHONE_DIR="${ASR_HOMOPHONE_DIR:-$MODELS_DIR/homophone}"
+  ASR_HOMOPHONE_LEXICON="${ASR_HOMOPHONE_LEXICON:-$ASR_HOMOPHONE_DIR/lexicon.txt}"
+  ASR_HOMOPHONE_RULE_FSTS="${ASR_HOMOPHONE_RULE_FSTS:-$ASR_HOMOPHONE_DIR/replace.fst}"
+  ASR_HOMOPHONE_LEXICON_URL="${ASR_HOMOPHONE_LEXICON_URL:-https://github.com/k2-fsa/sherpa-onnx/releases/download/hr-files/lexicon.txt}"
+  ASR_HOMOPHONE_GENERATOR_PYTHON="${ASR_HOMOPHONE_GENERATOR_PYTHON:-/opt/homophone-fst/bin/python}"
+  export ASR_HOMOPHONE_REPLACER_ENABLED
+  export ASR_HOMOPHONE_GENERATE_ON_START
+  export ASR_HOMOPHONE_CONFIG_PATH
+  export ASR_HOMOPHONE_DIR
+  export ASR_HOMOPHONE_LEXICON
+  export ASR_HOMOPHONE_RULE_FSTS
+  export ASR_HOMOPHONE_LEXICON_URL
+  export ASR_HOMOPHONE_GENERATOR_PYTHON
+}
+
 load_runtime_env() {
   [ -f "$RUNTIME_CONFIG_PATH" ] || return
 
@@ -774,6 +793,51 @@ ensure_melotts_model() {
     "$MELOTTS_REQUIRED_FILES"
 }
 
+enabled_value() {
+  case "$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')" in
+    1|true|yes|on) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+ensure_homophone_replacer_resources() {
+  enabled_value "$ASR_HOMOPHONE_REPLACER_ENABLED" || return
+
+  mkdir -p "$ASR_HOMOPHONE_DIR"
+  if [ ! -s "$ASR_HOMOPHONE_LEXICON" ]; then
+    download_with_progress "$ASR_HOMOPHONE_LEXICON" "$ASR_HOMOPHONE_LEXICON_URL" "homophone lexicon"
+  fi
+
+  if enabled_value "$ASR_HOMOPHONE_GENERATE_ON_START"; then
+    if [ -s "$ASR_HOMOPHONE_CONFIG_PATH" ]; then
+      case "$ASR_HOMOPHONE_RULE_FSTS" in
+        *,*)
+          echo "Cannot auto-generate multiple homophone rule FSTs: $ASR_HOMOPHONE_RULE_FSTS" >&2
+          exit 1
+          ;;
+        *)
+          if [ ! -x "$ASR_HOMOPHONE_GENERATOR_PYTHON" ]; then
+            echo "Homophone FST generator Python is missing or not executable: $ASR_HOMOPHONE_GENERATOR_PYTHON" >&2
+            exit 1
+          fi
+          "$ASR_HOMOPHONE_GENERATOR_PYTHON" /app/runtime/tools/homophone.py \
+            "$ASR_HOMOPHONE_CONFIG_PATH" \
+            "$ASR_HOMOPHONE_RULE_FSTS"
+          chat2me_log info "Generated homophone rule FST: $ASR_HOMOPHONE_RULE_FSTS"
+          ;;
+      esac
+    else
+      echo "Homophone config is missing: $ASR_HOMOPHONE_CONFIG_PATH" >&2
+      exit 1
+    fi
+  fi
+
+  if [ ! -s "$ASR_HOMOPHONE_RULE_FSTS" ]; then
+    echo "Homophone rule FST is missing: $ASR_HOMOPHONE_RULE_FSTS" >&2
+    exit 1
+  fi
+}
+
 init_config
 load_runtime_env
 
@@ -782,6 +846,7 @@ VOICE_ROLE="${VOICE_ROLE:-}"
 resolve_kws_model
 resolve_asr_model
 resolve_tts_model
+resolve_homophone_replacer
 : "${WAKE_WORDS:?WAKE_WORDS must be set in runtime.env}"
 : "${AUDIO_SAMPLE_RATE:?AUDIO_SAMPLE_RATE must be set in runtime.env}"
 KWS_MODEL="$MODELS_DIR/$KWS_MODEL_NAME"
@@ -905,6 +970,8 @@ if model_selected asr; then
     "$ASR_MODEL_URL" \
     asr_model_ok \
     "$ASR_MODEL"
+  resolve_homophone_replacer
+  ensure_homophone_replacer_resources
 fi
 
 if model_selected melotts; then

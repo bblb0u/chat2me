@@ -89,6 +89,9 @@ SENSEVOICE_LANGUAGE = os.getenv("SENSEVOICE_LANGUAGE", "auto").strip().lower() o
 if SENSEVOICE_LANGUAGE not in {"auto", "zh", "en", "ja", "ko", "yue"}:
     raise RuntimeError("SENSEVOICE_LANGUAGE must be auto, zh, en, ja, ko, or yue in runtime.env")
 SENSEVOICE_USE_ITN = env_bool_default("SENSEVOICE_USE_ITN", True)
+ASR_HOMOPHONE_REPLACER_ENABLED = env_bool_default("ASR_HOMOPHONE_REPLACER_ENABLED", False)
+ASR_HOMOPHONE_LEXICON_RAW = os.getenv("ASR_HOMOPHONE_LEXICON", str(MODELS_DIR / "homophone" / "lexicon.txt")).strip()
+ASR_HOMOPHONE_RULE_FSTS = os.getenv("ASR_HOMOPHONE_RULE_FSTS", str(MODELS_DIR / "homophone" / "replace.fst")).strip()
 CORE_REQUEST_TIMEOUT_SECONDS = env_float_compat("CORE_REQUEST_TIMEOUT_SECONDS", "GATEWAY_REQUEST_TIMEOUT_SECONDS", "30")
 CORE_UNAVAILABLE_RESPONSE = os.getenv("CORE_UNAVAILABLE_RESPONSE") or env_value("GATEWAY_UNAVAILABLE_RESPONSE")
 COMMAND_TIMEOUT_SECONDS = env_float("COMMAND_TIMEOUT_SECONDS")
@@ -429,10 +432,12 @@ def create_sensevoice_asr() -> StreamingRecognizer:
     require_file(ASR_MODEL_DIR / "tokens.txt")
     model = sensevoice_model_file()
     require_file(model)
+    hr_kwargs = homophone_replacer_kwargs()
     log(
         "SenseVoice ASR config: "
         f"model={ASR_MODEL_DIR} language={SENSEVOICE_LANGUAGE} "
-        f"use_itn={SENSEVOICE_USE_ITN} threads={ASR_THREADS} provider=cpu"
+        f"use_itn={SENSEVOICE_USE_ITN} threads={ASR_THREADS} provider=cpu "
+        f"homophone_replacer={'enabled' if hr_kwargs else 'disabled'}"
     )
 
     recognizer = sherpa_onnx.OfflineRecognizer.from_sense_voice(
@@ -445,9 +450,33 @@ def create_sensevoice_asr() -> StreamingRecognizer:
         language=SENSEVOICE_LANGUAGE,
         use_itn=SENSEVOICE_USE_ITN,
         provider="cpu",
+        **hr_kwargs,
     )
     log("SenseVoice ASR loaded: provider=cpu")
     return SenseVoiceRecognizer(recognizer)
+
+
+def homophone_replacer_kwargs() -> dict[str, str]:
+    if not ASR_HOMOPHONE_REPLACER_ENABLED:
+        return {}
+    if not ASR_HOMOPHONE_LEXICON_RAW:
+        raise RuntimeError("homophone replacer enabled but ASR_HOMOPHONE_LEXICON is empty")
+
+    lexicon = Path(ASR_HOMOPHONE_LEXICON_RAW)
+    if not lexicon.is_file():
+        raise FileNotFoundError(f"homophone replacer lexicon is missing: {lexicon}")
+
+    rule_files = tuple(Path(item.strip()) for item in ASR_HOMOPHONE_RULE_FSTS.split(",") if item.strip())
+    if not rule_files:
+        raise RuntimeError("homophone replacer enabled but ASR_HOMOPHONE_RULE_FSTS is empty")
+
+    missing = [str(path) for path in rule_files if not path.is_file()]
+    if missing:
+        raise FileNotFoundError(f"homophone replacer rule FST is missing: {', '.join(missing)}")
+
+    rule_fsts = ",".join(str(path) for path in rule_files)
+    log(f"homophone replacer files: lexicon={lexicon} rule_fsts={rule_fsts}")
+    return {"hr_lexicon": str(lexicon), "hr_rule_fsts": rule_fsts}
 
 
 def create_asr() -> StreamingRecognizer:

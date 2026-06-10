@@ -1,0 +1,16 @@
+# ASR 同音替换词库。
+# 添加中文 target；容器启动时会转拼音并生成 /models/homophone/replace.fst。
+rules:
+  - target: "江淮中心"
+  - target: "江淮前沿技术协同创新中心"
+  - target: "安徽合肥"
+  - target: "安徽省合肥市"
+  - target: "智能机器人"
+  - target: "人形机器人"
+  - target: "空间机器人"
+  - target: "智能无人飞行器"
+  - target: "智能测评"
+  - target: "智能部组件"
+  - target: "产业化转化平台"
+  - target: "清华大学"
+  - target: "中国科学技术大学"
