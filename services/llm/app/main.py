@@ -41,6 +41,8 @@ load_runtime_env()
 
 LOCAL_LLM_PROVIDERS = {"ollama", "local"}
 ONLINE_LLM_PROVIDERS = {"online"}
+ONLINE_LLM_PROVIDER_OPENAI_COMPATIBLE = "openai_compatible"
+SUPPORTED_ONLINE_LLM_PROVIDERS = {ONLINE_LLM_PROVIDER_OPENAI_COMPATIBLE}
 CHAT_COMPLETIONS_PATH = "/chat/completions"
 RESPONSES_PATH = "/responses"
 MODELS_PATH = "/models"
@@ -79,7 +81,25 @@ def normalize_provider(value: str) -> str:
     return value.strip().lower().replace("-", "_")
 
 
-LLM_PROVIDER = normalize_provider(env_value("LLM_PROVIDER"))
+def provider_display_name(value: str) -> str:
+    return value.replace("_", "-")
+
+
+def env_alias_value(primary_key: str, legacy_key: str) -> str:
+    value = os.getenv(primary_key)
+    if value is not None and value.strip():
+        return value.strip()
+    value = os.getenv(legacy_key)
+    if value is not None and value.strip():
+        return value.strip()
+    raise RuntimeError(f"{primary_key} must be set in runtime.env")
+
+
+LLM_ENGINE = normalize_provider(env_alias_value("LLM_ENGINE", "LLM_PROVIDER"))
+LLM_ONLINE_PROVIDER = normalize_provider(
+    env_value("LLM_ONLINE_PROVIDER", allow_empty=True, default="openai-compatible") or "openai-compatible"
+)
+LLM_ONLINE_PROVIDER_DISPLAY = provider_display_name(LLM_ONLINE_PROVIDER)
 OLLAMA_BASE_URL = "http://127.0.0.1:11434"
 OLLAMA_MODEL = env_value("OLLAMA_MODEL", allow_empty=True)
 LLM_MODEL = env_value("LLM_MODEL", allow_empty=True)
@@ -212,14 +232,16 @@ def online_headers() -> dict[str, str]:
 
 
 def provider_is_local() -> bool:
-    return LLM_PROVIDER in LOCAL_LLM_PROVIDERS
+    return LLM_ENGINE in LOCAL_LLM_PROVIDERS
 
 
 def provider_is_online() -> bool:
-    return LLM_PROVIDER in ONLINE_LLM_PROVIDERS
+    return LLM_ENGINE in ONLINE_LLM_PROVIDERS
 
 
 def require_online_config() -> str:
+    if LLM_ONLINE_PROVIDER not in SUPPORTED_ONLINE_LLM_PROVIDERS:
+        raise LLMConfigError("在线大模型只支持 LLM_ONLINE_PROVIDER=openai-compatible。")
     if not LLM_MODEL:
         raise LLMConfigError("在线大模型未配置 LLM_MODEL。")
     base_url = online_base_url()
@@ -435,7 +457,7 @@ async def call_llm(
                 return await call_local_result(message, system_prompt=system_prompt, fallback=True, online_status="request_failed")
         log(f"online LLM unavailable; falling back to local: {reachability.status}", level="warning")
         return await call_local_result(message, system_prompt=system_prompt, fallback=True, online_status=reachability.status)
-    raise LLMConfigError("未配置 LLM_PROVIDER。")
+    raise LLMConfigError("未配置 LLM_ENGINE。")
 
 
 async def check_ollama_health() -> str:
@@ -473,7 +495,10 @@ async def online_reachability_loop() -> None:
 
 async def start_online_reachability_loop() -> None:
     global ONLINE_REACHABILITY_TASK, ONLINE_REACHABILITY
-    log(f"llm service ready: provider={LLM_PROVIDER} local_model={OLLAMA_MODEL or 'unset'}")
+    log(
+        f"llm service ready: engine={LLM_ENGINE} "
+        f"online_provider={LLM_ONLINE_PROVIDER_DISPLAY} local_model={OLLAMA_MODEL or 'unset'}"
+    )
     if provider_is_online():
         ONLINE_REACHABILITY = await probe_online_health()
         ONLINE_REACHABILITY_TASK = asyncio.create_task(online_reachability_loop())
@@ -506,7 +531,7 @@ async def llm_reachability() -> ReachabilityResponse:
     if not provider_is_online():
         return ReachabilityResponse(
             online=False,
-            provider=LLM_PROVIDER or "unconfigured",
+            provider=LLM_ENGINE or "unconfigured",
             model=LLM_MODEL or None,
             status="online_provider_disabled",
         )
@@ -514,7 +539,7 @@ async def llm_reachability() -> ReachabilityResponse:
     reachability = ONLINE_REACHABILITY
     return ReachabilityResponse(
         online=reachability.online,
-        provider=LLM_PROVIDER,
+        provider=LLM_ONLINE_PROVIDER_DISPLAY,
         model=LLM_MODEL or None,
         status=reachability.status,
         checked_at=reachability.checked_at,
@@ -529,7 +554,7 @@ async def health() -> HealthResponse:
         status = "ok" if reachability.online or ollama_status == "ok" else "degraded"
         return HealthResponse(
             status=status,
-            provider=LLM_PROVIDER,
+            provider=LLM_ONLINE_PROVIDER_DISPLAY,
             model=LLM_MODEL or None,
             llm=reachability.status,
             ollama=ollama_status,
@@ -540,7 +565,7 @@ async def health() -> HealthResponse:
     status = "ok" if ollama_status == "ok" else "degraded"
     return HealthResponse(
         status=status,
-        provider=LLM_PROVIDER,
+        provider=LLM_ENGINE,
         model=OLLAMA_MODEL or None,
         llm=ollama_status,
         ollama=ollama_status,

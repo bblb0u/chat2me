@@ -134,7 +134,7 @@ CHAT2ME_CONSOLE_LOG_LEVEL=warning
 常用 LLM 配置：
 
 ```env
-LLM_PROVIDER=ollama
+LLM_ENGINE=ollama
 OLLAMA_MODEL=qwen3:4b-instruct
 INTENT_CLASSIFIER_ENABLED=1
 INTENT_MODEL=
@@ -145,7 +145,8 @@ INTENT_MODEL=
 在线 LLM，失败回落本地 Ollama：
 
 ```env
-LLM_PROVIDER=online
+LLM_ENGINE=online
+LLM_ONLINE_PROVIDER=openai-compatible
 LLM_BASE_URL=https://api.openai.com/v1
 LLM_MODEL=gpt-5-mini
 LLM_API_KEY=sk-...
@@ -235,11 +236,12 @@ EDGE_TTS_PROXY=
 
 `chat2me-llm` 负责在线 LLM 与本地 Ollama 的路由：
 
-- `LLM_PROVIDER=ollama/local` 时使用本地 Ollama。
-- `LLM_PROVIDER=online` 时，后台周期访问 reachability 接口。
+- `LLM_ENGINE=ollama/local` 时使用本地 Ollama。
+- `LLM_ENGINE=online` 时，后台周期访问 reachability 接口。
+- `LLM_ONLINE_PROVIDER=openai-compatible` 表示在线接口使用 OpenAI-compatible 协议。
 - 在线可用时调用在线模型，不可用或请求失败时回落 `OLLAMA_MODEL`。
 - 支持 OpenAI Chat Completions 风格响应，也兼容 Responses API 的 `output_text/output` 字段。
-- `/intent` 固定使用本地 Ollama，只输出短 JSON 给 Core 做路由，不受 `LLM_PROVIDER=online` 影响。
+- `/intent` 固定使用本地 Ollama，只输出短 JSON 给 Core 做路由，不受 `LLM_ENGINE=online` 影响。
 
 `chat2me-asr` 和 `chat2me-tts` 独立运行：
 
