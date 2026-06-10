@@ -42,7 +42,6 @@ load_runtime_env()
 LOCAL_LLM_PROVIDERS = {"ollama", "local"}
 ONLINE_LLM_PROVIDERS = {"online"}
 ONLINE_LLM_PROVIDER_OPENAI = "openai"
-ONLINE_LLM_PROVIDER_OPENAI_COMPATIBLE = "openai_compatible"
 SUPPORTED_ONLINE_LLM_PROVIDERS = {ONLINE_LLM_PROVIDER_OPENAI}
 CHAT_COMPLETIONS_PATH = "/chat/completions"
 RESPONSES_PATH = "/responses"
@@ -86,25 +85,8 @@ def provider_display_name(value: str) -> str:
     return value.replace("_", "-")
 
 
-def normalize_online_provider(value: str) -> str:
-    provider = normalize_provider(value)
-    if provider == ONLINE_LLM_PROVIDER_OPENAI_COMPATIBLE:
-        return ONLINE_LLM_PROVIDER_OPENAI
-    return provider
-
-
-def env_alias_value(primary_key: str, legacy_key: str) -> str:
-    value = os.getenv(primary_key)
-    if value is not None and value.strip():
-        return value.strip()
-    value = os.getenv(legacy_key)
-    if value is not None and value.strip():
-        return value.strip()
-    raise RuntimeError(f"{primary_key} must be set in runtime.env")
-
-
-LLM_ENGINE = normalize_provider(env_alias_value("LLM_ENGINE", "LLM_PROVIDER"))
-LLM_ONLINE_PROVIDER = normalize_online_provider(
+LLM_ENGINE = normalize_provider(env_value("LLM_ENGINE"))
+LLM_ONLINE_PROVIDER = normalize_provider(
     env_value("LLM_ONLINE_PROVIDER", allow_empty=True, default="openai") or "openai"
 )
 LLM_ONLINE_PROVIDER_DISPLAY = provider_display_name(LLM_ONLINE_PROVIDER)
