@@ -244,11 +244,11 @@ until /bin/ollama list >/dev/null 2>&1; do
 done
 
 (
-  ensure_model_ready "$OLLAMA_MODEL" "local fallback model"
+  ensure_model_ready "$OLLAMA_MODEL" "local chat model"
 
   if [ -n "${INTENT_MODEL:-}" ]; then
     if [ "$INTENT_MODEL" = "$OLLAMA_MODEL" ]; then
-      echo "[llm] local intent model matches fallback model: $INTENT_MODEL"
+      echo "[llm] local intent model matches local chat model: $INTENT_MODEL"
     else
       ensure_model_ready "$INTENT_MODEL" "local intent model"
     fi
