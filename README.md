@@ -146,7 +146,7 @@ INTENT_MODEL=
 
 ```env
 LLM_ENGINE=online
-LLM_ONLINE_PROVIDER=openai-compatible
+LLM_ONLINE_PROVIDER=openai
 LLM_BASE_URL=https://api.openai.com/v1
 LLM_MODEL=gpt-5-mini
 LLM_API_KEY=sk-...
@@ -238,7 +238,7 @@ EDGE_TTS_PROXY=
 
 - `LLM_ENGINE=ollama/local` 时使用本地 Ollama。
 - `LLM_ENGINE=online` 时，后台周期访问 reachability 接口。
-- `LLM_ONLINE_PROVIDER=openai-compatible` 表示在线接口使用 OpenAI-compatible 协议。
+- `LLM_ONLINE_PROVIDER=openai` 表示在线接口使用 OpenAI-compatible 协议；官方 OpenAI 和兼容中转都走这套配置。
 - 在线可用时调用在线模型，不可用或请求失败时回落 `OLLAMA_MODEL`。
 - 支持 OpenAI Chat Completions 风格响应，也兼容 Responses API 的 `output_text/output` 字段。
 - `/intent` 固定使用本地 Ollama，只输出短 JSON 给 Core 做路由，不受 `LLM_ENGINE=online` 影响。
