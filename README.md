@@ -161,10 +161,6 @@ SENSEVOICE_LANGUAGE=auto
 SENSEVOICE_USE_ITN=1
 ASR_HOMOPHONE_REPLACER_ENABLED=1
 ASR_HOMOPHONE_GENERATE_ON_START=1
-ASR_HOMOPHONE_CONFIG_PATH=/app/config/homophones.yaml
-ASR_HOMOPHONE_GENERATOR_PYTHON=/opt/homophone-fst/bin/python
-ASR_HOMOPHONE_LEXICON=/models/homophone/lexicon.txt
-ASR_HOMOPHONE_RULE_FSTS=/models/homophone/replace.fst
 VOICE_TTS_ENGINE=melotts
 VOICE_TTS_MODEL=MeloTTS-Chinese
 VOICE_TTS_DEVICE=auto
@@ -172,6 +168,8 @@ MELOTTS_LANGUAGE=ZH
 MELOTTS_SPEAKER=ZH
 MELOTTS_DISABLE_BERT=1
 ```
+
+同音词条编辑 `config/homophones.yaml`；FST 生成路径、lexicon 路径和生成器路径由容器启动脚本使用默认值，普通部署不需要配置。
 
 Sherpa ONNX 的 KWS 和 SenseVoice ASR 使用 CPU 运行。SenseVoice 可启用 homophone replacer，在 ASR 输出后把同音识别结果替换成专有词；ASR 镜像内置 Pynini/OpenFST 生成环境，启动时读取中文 `homophones.yaml`，自动转拼音并生成 `/models/homophone/replace.fst`。生成失败会阻止 ASR 容器启动。MeloTTS 使用 PyTorch device，默认 `auto`，支持 `auto/cpu/cuda/gpu/cuda:<index>`。
 
