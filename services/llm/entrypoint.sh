@@ -198,6 +198,33 @@ model_ok() {
     && /bin/ollama run "$MODEL" "只回答OK" >/dev/null 2>&1
 }
 
+ensure_model_ready() {
+  MODEL="$1"
+  label="$2"
+
+  echo "[llm] validating $label: $MODEL"
+  if model_ok; then
+    echo "$MODEL is ready"
+    return 0
+  fi
+
+  echo "$MODEL is missing or invalid; re-downloading"
+  /bin/ollama rm "$MODEL" >/dev/null 2>&1 || true
+
+  until pull_model_with_progress; do
+    echo "Retrying Ollama model pull: $MODEL"
+    sleep 30
+  done
+
+  echo "[llm] validating model after download: $MODEL"
+  if model_ok; then
+    echo "$MODEL is ready"
+  else
+    echo "$MODEL was downloaded but failed runtime validation" >&2
+    print_ollama_log_tail
+  fi
+}
+
 OLLAMA_LOG_PIPE="/tmp/ollama-log.$$"
 rm -f "$OLLAMA_LOG_PIPE"
 mkfifo "$OLLAMA_LOG_PIPE"
@@ -217,26 +244,14 @@ until /bin/ollama list >/dev/null 2>&1; do
 done
 
 (
-  echo "[llm] validating local fallback model: $MODEL"
-  if model_ok; then
-    echo "$MODEL is ready"
-    exit 0
-  fi
+  ensure_model_ready "$OLLAMA_MODEL" "local fallback model"
 
-  echo "$MODEL is missing or invalid; re-downloading"
-  /bin/ollama rm "$MODEL" >/dev/null 2>&1 || true
-
-  until pull_model_with_progress; do
-    echo "Retrying Ollama model pull: $MODEL"
-    sleep 30
-  done
-
-  echo "[llm] validating model after download: $MODEL"
-  if model_ok; then
-    echo "$MODEL is ready"
-  else
-    echo "$MODEL was downloaded but failed runtime validation" >&2
-    print_ollama_log_tail
+  if [ -n "${INTENT_MODEL:-}" ]; then
+    if [ "$INTENT_MODEL" = "$OLLAMA_MODEL" ]; then
+      echo "[llm] local intent model matches fallback model: $INTENT_MODEL"
+    else
+      ensure_model_ready "$INTENT_MODEL" "local intent model"
+    fi
   fi
 ) &
 

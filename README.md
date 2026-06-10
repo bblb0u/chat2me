@@ -137,7 +137,10 @@ CHAT2ME_CONSOLE_LOG_LEVEL=warning
 LLM_PROVIDER=ollama
 OLLAMA_MODEL=qwen3:4b-instruct
 INTENT_CLASSIFIER_ENABLED=1
+INTENT_MODEL=
 ```
+
+`INTENT_MODEL` 为空时复用 `OLLAMA_MODEL`；填写其它 Ollama 模型名时，LLM 服务启动后会自动下载并校验该意图模型。
 
 在线 LLM，失败回落本地 Ollama：
 
@@ -351,7 +354,7 @@ PY
 | 文件 | 作用 |
 | --- | --- |
 | `services/llm/Dockerfile` | 基于 Ubuntu 复制 Ollama 二进制，构建 LLM 网关镜像。 |
-| `services/llm/entrypoint.sh` | 初始化配置、启动 Ollama、下载/校验 `OLLAMA_MODEL`。 |
+| `services/llm/entrypoint.sh` | 初始化配置、启动 Ollama、下载/校验 `OLLAMA_MODEL` 和非空的 `INTENT_MODEL`。 |
 | `services/llm/requirements.txt` | LLM 网关 Python 依赖。 |
 | `services/llm/app/main.py` | LLM FastAPI 应用：本地/在线路由、探活、回落、响应解析。 |
 
@@ -444,7 +447,7 @@ TTS：
 
 LLM：
 
-- 本地 Ollama：由 `OLLAMA_MODEL` 指定。
+- 本地 Ollama：由 `OLLAMA_MODEL` 指定；本地意图分类可用 `INTENT_MODEL` 单独指定小模型，留空则复用 `OLLAMA_MODEL`。
 - 在线 OpenAI-compatible：由 `LLM_BASE_URL`、`LLM_MODEL`、`LLM_API_KEY` 指定。
 
 ## 显示屏固件
