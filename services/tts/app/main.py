@@ -37,7 +37,6 @@ class Reachability:
 
 class SpeakRequest(BaseModel):
     text: str = Field(..., min_length=1)
-    online_available: bool | None = None
 
 
 class HealthResponse(BaseModel):
@@ -213,7 +212,7 @@ async def reachability() -> ReachabilityResponse:
 
 @app.post("/tts/speak")
 async def speak(request: SpeakRequest) -> Response:
-    use_online = online_enabled() and (ONLINE_REACHABILITY.online if request.online_available is None else request.online_available)
+    use_online = online_enabled() and ONLINE_REACHABILITY.online
 
     with TTS_INFERENCE_LOCK:
         if use_online and ONLINE_VOICE is not None:

@@ -5,7 +5,6 @@ import io
 import logging
 import os
 import re
-import threading
 import subprocess
 import time
 import wave
@@ -60,13 +59,8 @@ if not WAKE_WORDS:
     raise RuntimeError("WAKE_WORDS must contain at least one wake word in runtime.env")
 
 CORE_URL = "http://chat2me-core:8080/chat"
-CORE_REACHABILITY_URL = "http://chat2me-core:8080/llm/reachability"
 ASR_SERVICE_URL = "http://chat2me-asr:8092/asr/transcribe"
 TTS_SERVICE_URL = "http://chat2me-tts:8093/tts/speak"
-TTS_REACHABILITY_URL = "http://chat2me-tts:8093/tts/reachability"
-NETWORK_UNAVAILABLE_RESPONSE = env_value("NETWORK_UNAVAILABLE_RESPONSE")
-LLM_ROUTE_CACHE_INTERVAL_SECONDS = 2.0
-TTS_ROUTE_CACHE_INTERVAL_SECONDS = 2.0
 DISPLAY_SERIAL_BAUD = env_int("DISPLAY_SERIAL_BAUD")
 INPUT_DEVICE = env_value("AUDIO_INPUT_DEVICE", allow_empty=True)
 INPUT_DEVICE_REQUIRED = bool(INPUT_DEVICE and not INPUT_DEVICE.isdigit())
@@ -155,23 +149,6 @@ if not SESSION_END_PHRASES:
     raise RuntimeError("SESSION_END_PHRASES must contain at least one phrase in runtime.env")
 KWS_KEYWORDS_SCORE = env_float("KWS_KEYWORDS_SCORE")
 KWS_KEYWORDS_THRESHOLD = env_float("KWS_KEYWORDS_THRESHOLD")
-LLM_ROUTE_CACHE = {
-    "online": False,
-    "route": "local",
-    "provider": "",
-    "model": "",
-    "status": "not_checked",
-    "updated_at": 0.0,
-}
-LLM_ROUTE_CACHE_LOCK = threading.Lock()
-TTS_ROUTE_CACHE = {
-    "online": False,
-    "provider": "",
-    "model": "",
-    "status": "not_checked",
-    "updated_at": 0.0,
-}
-TTS_ROUTE_CACHE_LOCK = threading.Lock()
 
 
 class StreamingRecognizer(Protocol):
@@ -401,11 +378,6 @@ def float_audio_to_wav_bytes(samples: np.ndarray, sample_rate: int) -> bytes:
         wav.setframerate(sample_rate)
         wav.writeframes(pcm)
     return buffer.getvalue()
-
-
-def cached_online_available(cache: dict[str, Any], lock: threading.Lock) -> bool:
-    with lock:
-        return bool(cache.get("online", False))
 
 
 def transcribe_remote_audio(samples: np.ndarray, sample_rate: int) -> str:
@@ -752,10 +724,7 @@ def synthesize_edge_tts_audio(text: str) -> bytes:
 def synthesize_remote_wav(text: str) -> bytes:
     import httpx
 
-    payload = {
-        "text": text,
-        "online_available": cached_online_available(TTS_ROUTE_CACHE, TTS_ROUTE_CACHE_LOCK),
-    }
+    payload = {"text": text}
     read_timeout = max(float(EDGE_TTS_RECEIVE_TIMEOUT_SECONDS), TTS_PLAYER_TIMEOUT_SECONDS) + 10
     timeout = httpx.Timeout(connect=5.0, read=read_timeout, write=15.0, pool=5.0)
     with httpx.Client(timeout=timeout) as client:
@@ -1095,107 +1064,10 @@ def listen_command(
     return final_text
 
 
-def refresh_llm_route_cache() -> None:
-    import httpx
-
-    try:
-        timeout = min(max(LLM_ROUTE_CACHE_INTERVAL_SECONDS * 0.5, 0.2), 1.0)
-        with httpx.Client(timeout=timeout) as client:
-            response = client.get(CORE_REACHABILITY_URL)
-            response.raise_for_status()
-            data: dict[str, Any] = response.json()
-    except Exception as exc:
-        log(f"llm reachability cache unavailable: {exc}", level="debug")
-        data = {"online": False, "provider": "", "model": "", "status": "unavailable"}
-
-    route = "online" if data.get("online") is True else "local"
-    with LLM_ROUTE_CACHE_LOCK:
-        LLM_ROUTE_CACHE.update(
-            {
-                "online": data.get("online") is True,
-                "route": route,
-                "provider": str(data.get("provider") or ""),
-                "model": str(data.get("model") or ""),
-                "status": str(data.get("status") or ""),
-                "updated_at": time.time(),
-            }
-        )
-
-
-def refresh_service_reachability(url: str, cache: dict[str, Any], lock: threading.Lock, label: str) -> None:
-    import httpx
-
-    try:
-        with httpx.Client(timeout=1.0) as client:
-            response = client.get(url)
-            response.raise_for_status()
-            data: dict[str, Any] = response.json()
-    except Exception as exc:
-        log(f"{label} reachability cache unavailable: {exc}", level="debug")
-        data = {"online": False, "provider": "", "model": "", "status": "unavailable"}
-
-    with lock:
-        cache.update(
-            {
-                "online": bool(data.get("online") is True),
-                "provider": str(data.get("provider") or ""),
-                "model": str(data.get("model") or ""),
-                "status": str(data.get("status") or ""),
-                "updated_at": time.time(),
-            }
-        )
-
-
-def service_reachability_loop(
-    url: str,
-    cache: dict[str, Any],
-    lock: threading.Lock,
-    label: str,
-    interval_seconds: float,
-) -> None:
-    interval = max(0.5, interval_seconds)
-    while True:
-        refresh_service_reachability(url, cache, lock, label)
-        time.sleep(interval)
-
-
-def llm_route_cache_loop() -> None:
-    interval = max(0.5, LLM_ROUTE_CACHE_INTERVAL_SECONDS)
-    while True:
-        refresh_llm_route_cache()
-        time.sleep(interval)
-
-
-def start_llm_route_cache() -> None:
-    refresh_llm_route_cache()
-    threading.Thread(target=llm_route_cache_loop, daemon=True).start()
-
-
-def start_tts_route_cache() -> None:
-    refresh_service_reachability(TTS_REACHABILITY_URL, TTS_ROUTE_CACHE, TTS_ROUTE_CACHE_LOCK, "tts")
-    threading.Thread(
-        target=service_reachability_loop,
-        args=(TTS_REACHABILITY_URL, TTS_ROUTE_CACHE, TTS_ROUTE_CACHE_LOCK, "tts", TTS_ROUTE_CACHE_INTERVAL_SECONDS),
-        daemon=True,
-    ).start()
-
-
-def log_llm_online_cache() -> None:
-    with LLM_ROUTE_CACHE_LOCK:
-        cached = dict(LLM_ROUTE_CACHE)
-    log(
-        "llm online cache for session: "
-        f"online={cached.get('online')} provider={cached['provider']} model={cached['model']} status={cached['status']}"
-    )
-
-
 def ask_core(text: str) -> str:
     import httpx
 
-    payload: dict[str, Any] = {
-        "message": text,
-        "online_available": cached_online_available(LLM_ROUTE_CACHE, LLM_ROUTE_CACHE_LOCK),
-    }
+    payload: dict[str, Any] = {"message": text}
     with httpx.Client(timeout=CORE_REQUEST_TIMEOUT_SECONDS) as client:
         response = client.post(CORE_URL, json=payload)
         response.raise_for_status()

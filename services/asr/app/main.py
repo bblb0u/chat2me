@@ -8,7 +8,7 @@ import wave
 from contextlib import asynccontextmanager
 
 import numpy as np
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, HTTPException, UploadFile
 from pydantic import BaseModel
 
 from app import voice
@@ -142,12 +142,10 @@ async def reachability() -> ReachabilityResponse:
 @app.post("/asr/transcribe", response_model=TranscribeResponse)
 async def transcribe(
     file: UploadFile = File(...),
-    online_available: bool | None = Form(default=None),
 ) -> TranscribeResponse:
     started_at = time.perf_counter()
     payload = await file.read()
     samples, sample_rate = read_wav_upload(payload)
-    _ = online_available
 
     with ASR_INFERENCE_LOCK:
         if LOCAL_RECOGNIZER is None:

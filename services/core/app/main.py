@@ -76,10 +76,6 @@ SAFETY_PATH = Path(os.getenv("SAFETY_PATH", "/app/config/safety.yaml"))
 
 class ChatRequest(BaseModel):
     message: str = Field(..., min_length=1, max_length=2000)
-    stream: bool = False
-    llm_route: str | None = None
-    online_available: bool | None = None
-    system_prompt: str | None = None
 
 
 class ChatResponse(BaseModel):
@@ -188,9 +184,6 @@ async def call_llm_service(request: ChatRequest) -> ChatResponse:
     system_prompt = str(profile().get("system_prompt", "")).strip()
     payload: dict[str, Any] = {
         "message": request.message.strip(),
-        "stream": request.stream,
-        "llm_route": request.llm_route,
-        "online_available": request.online_available,
         "system_prompt": system_prompt,
     }
     timeout = httpx.Timeout(connect=5.0, read=CORE_LLM_TIMEOUT_SECONDS, write=10.0, pool=5.0)

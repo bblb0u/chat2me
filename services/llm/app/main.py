@@ -100,9 +100,6 @@ SYSTEM_PROMPT = os.getenv("LLM_SYSTEM_PROMPT", "").strip()
 
 class ChatRequest(BaseModel):
     message: str = Field(..., min_length=1, max_length=2000)
-    stream: bool = False
-    llm_route: str | None = None
-    online_available: bool | None = None
     system_prompt: str | None = None
 
 
@@ -344,23 +341,6 @@ async def call_online_llm(message: str, system_prompt: str | None = None) -> str
     return strip_thinking(extract_online_answer(response_json(response)))
 
 
-def normalize_llm_route(route: str | None) -> str:
-    value = (route or "auto").strip().lower().replace("-", "_")
-    if value in {"", "auto"}:
-        return "auto"
-    if value in {"local", "ollama"}:
-        return "local"
-    if value == "online":
-        return "online"
-    raise LLMConfigError(f"不支持的 llm_route：{route}")
-
-
-def cached_online_available(override: bool | None = None) -> bool:
-    if override is not None:
-        return override
-    return ONLINE_REACHABILITY.online
-
-
 async def call_local_result(
     message: str,
     *,
@@ -380,26 +360,10 @@ async def call_online_result(message: str, system_prompt: str | None = None) -> 
 
 async def call_llm(
     message: str,
-    route: str | None = None,
-    online_available: bool | None = None,
     system_prompt: str | None = None,
 ) -> LLMResult:
-    requested_route = normalize_llm_route(route)
     reachability = ONLINE_REACHABILITY
-    online_ok = cached_online_available(online_available)
-
-    if requested_route == "local":
-        return await call_local_result(message, system_prompt=system_prompt)
-
-    if requested_route == "online":
-        if provider_is_online() and online_ok:
-            try:
-                return await call_online_result(message, system_prompt)
-            except httpx.HTTPError as exc:
-                log(f"online LLM failed; falling back to local: {exc}", level="warning")
-                return await call_local_result(message, system_prompt=system_prompt, fallback=True, online_status="request_failed")
-        log(f"online LLM unavailable; falling back to local: {reachability.status}", level="warning")
-        return await call_local_result(message, system_prompt=system_prompt, fallback=True, online_status=reachability.status)
+    online_ok = reachability.online
 
     if provider_is_local():
         return await call_local_result(message, system_prompt=system_prompt)
@@ -539,8 +503,6 @@ async def chat(request: ChatRequest) -> ChatResponse:
     try:
         result = await call_llm(
             request.message.strip(),
-            request.llm_route,
-            request.online_available,
             request.system_prompt,
         )
     except LLMConfigError as exc:

@@ -214,14 +214,13 @@ EDGE_TTS_PROXY=
 
 `chat2me-speech` 是语音会话入口。它启动后会：
 
-1. 周期拉取 LLM/TTS reachability，把在线可用性缓存在本地。
-2. 打开 ReSpeaker 控制接口，按配置写入 AGC、降噪、VAD、AEC 参数。
-3. 用 Sherpa ONNX KWS 模型监听唤醒词。
-4. 唤醒后播放 `WAKE_RESPONSE`，进入多轮会话。
-5. 录音时先做噪声门限校准，再把音频送入远程 ASR 服务。
-6. 维护并暴露 `/state`，读取时会刷新当前方向；方向数据放在 `state.direction` 里。
-7. 其他问题调用 `chat2me-core`，拿到回答后调用远程 TTS 服务。
-8. 播放期间暂停输入流，避免扬声器声音被继续识别。
+1. 打开 ReSpeaker 控制接口，按配置写入 AGC、降噪、VAD、AEC 参数。
+2. 用 Sherpa ONNX KWS 模型监听唤醒词。
+3. 唤醒后播放 `WAKE_RESPONSE`，进入多轮会话。
+4. 录音时先做噪声门限校准，再把音频送入远程 ASR 服务。
+5. 维护并暴露 `/state`，读取时会刷新当前方向；方向数据放在 `state.direction` 里。
+6. 其他问题调用 `chat2me-core`，拿到回答后调用远程 TTS 服务。
+7. 播放期间暂停输入流，避免扬声器声音被继续识别。
 
 `chat2me-core` 的 `/chat` 处理顺序：
 
@@ -242,7 +241,7 @@ EDGE_TTS_PROXY=
 
 - `chat2me-asr` 启动时创建 Sherpa ONNX SenseVoice 识别实例。
 - `chat2me-tts` 启动时创建本地 TTS；配置 `VOICE_TTS_ENGINE=online` 时同时创建在线实例并后台探活。
-- TTS 请求优先使用调用方传入的 `online_available` 缓存值，避免每次请求阻塞在探活流程。
+- TTS 请求使用服务内部的后台探活缓存决定在线/本地路由，不在请求路径临时探活。
 - 在线 TTS 请求失败会自动回落到本地 `melotts/MeloTTS-Chinese`。
 - ASR 输入是 16-bit PCM WAV；TTS 输出是 `audio/wav`。
 
@@ -470,5 +469,5 @@ DISPLAY_SERIAL_BAUD=115200
 - `docker-compose.yml` 使用 ARM64 镜像；LLM/TTS 服务默认使用 `runtime: nvidia`，ASR/KWS 使用 CPU。
 - `chat2me-speech` 需要访问 `/dev/snd`、`/dev/bus/usb` 和宿主机 ALSA 配置。
 - `chat2me-relay` 通过挂载 `/dev` 到 `/host-dev` 查找 ESP32 或其他串口外设；不启动它不影响唤醒、收音、ASR/TTS 和对话。
-- LLM/TTS 在线模式不代表每次请求都先探测网络；服务会后台探活，请求使用最近缓存状态。
+- LLM/TTS 在线模式不代表每次请求都先探测网络；各服务启用在线模式后会后台探活，请求使用本服务最近缓存状态。
 - 修改 `config/*` 会影响新初始化的配置；已有部署请改 `data/config/*`。

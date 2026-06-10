@@ -27,19 +27,14 @@ from app.voice import (
     INPUT_DEVICE,
     INPUT_DEVICE_REQUIRED,
     KWS_MODEL_DIR,
-    LLM_ROUTE_CACHE,
-    LLM_ROUTE_CACHE_LOCK,
     MAX_SESSION_TURNS,
     POST_RESPONSE_DRAIN_SECONDS,
     SAMPLE_RATE,
     SESSION_END_RESPONSE,
     SESSION_IDLE_RESPONSE,
-    TTS_ROUTE_CACHE,
-    TTS_ROUTE_CACHE_LOCK,
     TTS_SERVICE_URL,
     WAKE_RESPONSE,
     DisplayClient,
-    cached_online_available,
     create_kws,
     create_remote_asr,
     create_remote_tts,
@@ -47,14 +42,11 @@ from app.voice import (
     env_float,
     handle_conversation_turn,
     listen_command,
-    log_llm_online_cache,
     log,
     read_mono,
     select_input_device,
     spoken_text,
     speak_pausing_input,
-    start_llm_route_cache,
-    start_tts_route_cache,
     wake_words_display,
     write_beep,
 )
@@ -203,10 +195,6 @@ class WakeHandler(BaseHTTPRequestHandler):
             self._send_json({"ok": False, "error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
 
 
-def route_cache_online(cache: dict[str, object], lock: threading.Lock) -> bool:
-    return cached_online_available(cache, lock)
-
-
 def decode_audio_wav_base64(value: object) -> bytes:
     if not isinstance(value, str) or not value.strip():
         raise ValueError("audio_wav_base64 must be a non-empty base64 string")
@@ -258,13 +246,8 @@ def timed_post_asr(client: httpx.Client, wav_bytes: bytes) -> dict[str, object]:
     }
 
 
-def timed_post_core(client: httpx.Client, text: str, system_prompt: object) -> dict[str, object]:
-    payload: dict[str, object] = {
-        "message": text,
-        "online_available": route_cache_online(LLM_ROUTE_CACHE, LLM_ROUTE_CACHE_LOCK),
-    }
-    if isinstance(system_prompt, str) and system_prompt.strip():
-        payload["system_prompt"] = system_prompt.strip()
+def timed_post_core(client: httpx.Client, text: str) -> dict[str, object]:
+    payload: dict[str, object] = {"message": text}
     started = time.perf_counter()
     response = client.post(CORE_URL, json=payload)
     wall_ms = int((time.perf_counter() - started) * 1000)
@@ -285,10 +268,7 @@ def timed_post_tts(client: httpx.Client, text: str, return_audio_base64: bool) -
     with client.stream(
         "POST",
         TTS_SERVICE_URL,
-        json={
-            "text": text,
-            "online_available": route_cache_online(TTS_ROUTE_CACHE, TTS_ROUTE_CACHE_LOCK),
-        },
+        json={"text": text},
     ) as response:
         headers = {
             "route": response.headers.get("x-chat2me-tts-route"),
@@ -318,7 +298,6 @@ def run_diagnostic_turn(payload: dict[str, object]) -> dict[str, object]:
     input_text = str(payload.get("text") or "").strip()
     audio_base64 = payload.get("audio_wav_base64")
     return_audio_base64 = bool(payload.get("return_audio_base64"))
-    system_prompt = payload.get("system_prompt")
     result: dict[str, object] = {
         "ok": True,
         "input": {},
@@ -339,7 +318,7 @@ def run_diagnostic_turn(payload: dict[str, object]) -> dict[str, object]:
         if not input_text:
             raise ValueError("diagnostic turn requires text or audio that transcribes to text")
 
-        core_result = timed_post_core(client, input_text, system_prompt)
+        core_result = timed_post_core(client, input_text)
         result["core"] = core_result
         answer = core_result["answer"]
         tts_input = spoken_text(answer) or answer
@@ -575,7 +554,6 @@ def run_session(recognizer, voice, tts_config, display: SpeechState, beep_path: 
     chunk = int(CHUNK_SECONDS * SAMPLE_RATE)
     audio = open_session_input(input_device, chunk)
     try:
-        log_llm_online_cache()
         display.set_state("listening", "wake")
         speak_pausing_input(audio, WAKE_RESPONSE, voice, tts_config, display)
         drain_audio(audio, POST_RESPONSE_DRAIN_SECONDS)
@@ -609,8 +587,6 @@ def run_session(recognizer, voice, tts_config, display: SpeechState, beep_path: 
 
 def main() -> None:
     log(f"core url: {CORE_URL}")
-    start_llm_route_cache()
-    start_tts_route_cache()
     log("using remote ASR service")
     recognizer = create_remote_asr()
     log("using remote TTS service")
