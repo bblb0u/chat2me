@@ -8,7 +8,7 @@ import sys
 import threading
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 
 def load_runtime_env() -> None:
@@ -142,18 +142,20 @@ class DisplayClient:
         baud: int,
         text_max_chars: int | None = None,
         retry_seconds: float | None = None,
+        port_resolver: Callable[[], str] | None = None,
     ) -> None:
         self.port = port
         self.baud = baud
         self.text_max_chars = env_int("DISPLAY_TEXT_MAX_CHARS") if text_max_chars is None else text_max_chars
         self.retry_seconds = env_float("DISPLAY_SERIAL_RETRY_SECONDS") if retry_seconds is None else retry_seconds
+        self._port_resolver = port_resolver
         self._serial: Any | None = None
         self._lock = threading.Lock()
         self._disabled_until = 0.0
 
     @property
     def enabled(self) -> bool:
-        return bool(self.port)
+        return bool(self.port or self._port_resolver is not None)
 
     def close(self) -> None:
         with self._lock:
@@ -161,8 +163,20 @@ class DisplayClient:
 
     def _close_locked(self) -> None:
         if self._serial is not None:
-            self._serial.close()
+            try:
+                self._serial.close()
+            except Exception:
+                pass
             self._serial = None
+
+    def _resolve_port(self) -> str:
+        if self._port_resolver is None:
+            return self.port
+        port = self._port_resolver()
+        if port and port != self.port:
+            self.port = port
+            log(f"display serial resolved: {port}")
+        return port
 
     def set_state(self, state: str, text: str = "") -> None:
         if not self.enabled:
@@ -185,7 +199,10 @@ class DisplayClient:
         with self._lock:
             try:
                 if self._serial is None or not self._serial.is_open:
-                    self._serial = serial.Serial(self.port, self.baud, timeout=0, write_timeout=1)
+                    port = self._resolve_port()
+                    if not port:
+                        raise serial.SerialException("display serial port unavailable")
+                    self._serial = serial.Serial(port, self.baud, timeout=0, write_timeout=1)
                     time.sleep(0.1)
                 written = self._serial.write(line)
                 self._serial.flush()

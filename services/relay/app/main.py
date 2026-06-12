@@ -44,11 +44,17 @@ def resolve_display_port(port: str) -> str:
 
 
 display_port = resolve_display_port(DISPLAY_SERIAL_PORT)
+display_resolver = (
+    (lambda: resolve_display_port(DISPLAY_SERIAL_PORT))
+    if not DISPLAY_SERIAL_PORT or DISPLAY_SERIAL_PORT.lower() == "auto"
+    else None
+)
 display = DisplayClient(
     display_port,
     DISPLAY_SERIAL_BAUD,
     text_max_chars=DISPLAY_TEXT_MAX_CHARS,
     retry_seconds=DISPLAY_SERIAL_RETRY_SECONDS,
+    port_resolver=display_resolver,
 )
 state_lock = threading.Lock()
 last_event = {
@@ -134,7 +140,7 @@ class RelayHandler(BaseHTTPRequestHandler):
         if parsed.path == "/health":
             with state_lock:
                 event = dict(last_event)
-            self._send_json(200, {"display": bool(display_port), "port": display_port, **event})
+            self._send_json(200, {"display": display.enabled, "port": display.port, **event})
             return
         self._send_json(404, {"error": "not found"})
 

@@ -39,6 +39,10 @@ def env_bool_default(key: str, default: bool) -> bool:
     raise RuntimeError(f"{key} must be a boolean in runtime.env")
 
 
+def is_default_audio_selector(value: str) -> bool:
+    return value.strip().lower() in {"", "auto", "default"}
+
+
 MODELS_DIR = Path(os.getenv("MODELS_DIR", "/models"))
 VOICE_KWS_MODEL = "sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20"
 VOICE_ASR_ENGINE = env_value("VOICE_ASR_ENGINE")
@@ -63,7 +67,11 @@ ASR_SERVICE_URL = "http://chat2me-asr:8092/asr/transcribe"
 TTS_SERVICE_URL = "http://chat2me-tts:8093/tts/speak"
 DISPLAY_SERIAL_BAUD = env_int("DISPLAY_SERIAL_BAUD")
 INPUT_DEVICE = env_value("AUDIO_INPUT_DEVICE", allow_empty=True)
-INPUT_DEVICE_REQUIRED = bool(INPUT_DEVICE and not INPUT_DEVICE.isdigit())
+INPUT_DEVICE_REQUIRED = bool(
+    INPUT_DEVICE
+    and not INPUT_DEVICE.isdigit()
+    and not is_default_audio_selector(INPUT_DEVICE)
+)
 OUTPUT_DEVICE = env_value("AUDIO_OUTPUT_DEVICE", allow_empty=True)
 SAMPLE_RATE = env_int("AUDIO_SAMPLE_RATE")
 CHUNK_SECONDS = env_float("AUDIO_CHUNK_SECONDS")
@@ -116,6 +124,7 @@ TTS_CACHE_MAX_ITEMS = env_int("TTS_CACHE_MAX_ITEMS")
 TTS_CACHE_MAX_BYTES = env_int("TTS_CACHE_MAX_BYTES")
 TTS_PLAYBACK_MODE = os.getenv("TTS_PLAYBACK_MODE", "buffered").strip().lower()
 TTS_PREBUFFER_SECONDS = float(os.getenv("TTS_PREBUFFER_SECONDS", "2.4").strip() or "2.4")
+TTS_PLAYBACK_RETRY_SECONDS = float(os.getenv("TTS_PLAYBACK_RETRY_SECONDS", "3").strip() or "3")
 TTS_WARMUP_TEXTS = tuple(
     text.strip()
     for text in os.getenv("TTS_WARMUP_TEXTS", "").split("|")
@@ -185,7 +194,7 @@ def wake_words_display() -> str:
 
 
 def select_input_device(selector: str) -> int | str | None:
-    if not selector:
+    if not selector or is_default_audio_selector(selector):
         return None
     if selector.isdigit():
         return int(selector)
@@ -816,6 +825,19 @@ def write_player_stdin(player: subprocess.Popen[bytes], chunks: Iterable[bytes])
         player.stdin.close()
 
 
+def run_aplay(command: list[str], input_data: bytes) -> None:
+    deadline = time.monotonic() + min(max(0.0, TTS_PLAYBACK_RETRY_SECONDS), TTS_PLAYER_TIMEOUT_SECONDS)
+    last_return_code: int | None = None
+    while True:
+        result = subprocess.run(command, input=input_data, check=False, timeout=TTS_PLAYER_TIMEOUT_SECONDS)
+        if result.returncode == 0:
+            return
+        last_return_code = result.returncode
+        if time.monotonic() >= deadline:
+            raise RuntimeError(f"aplay exited with status {last_return_code}")
+        time.sleep(0.25)
+
+
 def play_pcm_chunks(command: list[str], chunks: Iterable[bytes]) -> None:
     with subprocess.Popen(command, stdin=subprocess.PIPE) as player:
         write_player_stdin(player, chunks)
@@ -854,9 +876,7 @@ def speak(text: str, voice: TextToSpeech, config: Any = None) -> None:
             f"tts buffered pcm: bytes={len(pcm)} duration={duration:.2f}s synth={time.monotonic() - started:.2f}s",
             level="debug",
         )
-        result = subprocess.run(playback_command(), input=pcm, check=False, timeout=TTS_PLAYER_TIMEOUT_SECONDS)
-        if result.returncode != 0:
-            raise RuntimeError(f"aplay exited with status {result.returncode}")
+        run_aplay(playback_command(), pcm)
         return
 
     if mode == "hybrid":

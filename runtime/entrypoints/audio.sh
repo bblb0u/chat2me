@@ -299,6 +299,59 @@ load_runtime_env() {
   rm -f "$protected_keys"
 }
 
+find_pulse_cookie() {
+  uid="$1"
+  for cookie in /host-home/*/.config/pulse/cookie; do
+    [ -r "$cookie" ] || continue
+    cookie_uid="$(stat -c %u "$cookie" 2>/dev/null || true)"
+    [ "$cookie_uid" = "$uid" ] || continue
+    printf '%s' "$cookie"
+    return 0
+  done
+  return 1
+}
+
+copy_pulse_cookie() {
+  source_cookie="$1"
+  pulse_dir="${XDG_RUNTIME_DIR:-/tmp}/chat2me-pulse"
+  mkdir -p "$pulse_dir"
+  chmod 700 "$pulse_dir" 2>/dev/null || true
+  target_cookie="$pulse_dir/cookie"
+  cp "$source_cookie" "$target_cookie"
+  chmod 600 "$target_cookie"
+  printf '%s' "$target_cookie"
+}
+
+configure_speech_audio_output() {
+  [ "${VOICE_ROLE:-}" = "chat2me-speech" ] || return 0
+
+  if ! aplay -L 2>/dev/null | grep -Fxq pulse; then
+    echo "PulseAudio ALSA plugin is missing in the speech image" >&2
+    exit 1
+  fi
+
+  for socket in /host-run/user/*/pulse/native /run/user/*/pulse/native; do
+    [ -S "$socket" ] || continue
+    uid="$(basename "$(dirname "$(dirname "$socket")")")"
+    cookie="$(find_pulse_cookie "$uid" || true)"
+    [ -n "$cookie" ] || continue
+    cookie_copy="$(copy_pulse_cookie "$cookie" || true)"
+    [ -n "$cookie_copy" ] || continue
+
+    PULSE_SERVER="unix:$socket"
+    PULSE_COOKIE="$cookie_copy"
+    AUDIO_OUTPUT_DEVICE="pulse"
+    export PULSE_SERVER PULSE_COOKIE AUDIO_OUTPUT_DEVICE
+    if pactl info >/dev/null 2>&1; then
+      chat2me_log info "pulse audio output enabled: $socket"
+      return
+    fi
+  done
+
+  echo "PulseAudio output is required but no host PulseAudio socket/cookie was found" >&2
+  exit 1
+}
+
 init_config() {
   if [ ! -d "$DEFAULT_CONFIG_DIR" ]; then
     return
@@ -843,6 +896,7 @@ load_runtime_env
 
 VOICE_MODELS_REQUIRED="${VOICE_MODELS_REQUIRED:-1}"
 VOICE_ROLE="${VOICE_ROLE:-}"
+configure_speech_audio_output
 resolve_kws_model
 resolve_asr_model
 resolve_tts_model

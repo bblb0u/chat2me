@@ -20,10 +20,12 @@ RUN apt-get update \
        alsa-utils \
        ca-certificates \
        curl \
+       libasound2-plugins \
        libasound2 \
        libgomp1 \
        libopenblas-base \
        libportaudio2 \
+       pulseaudio-utils \
        libusb-1.0-0 \
        python3 \
        python3-pip \

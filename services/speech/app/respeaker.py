@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import re
 import struct
 import threading
@@ -52,6 +53,15 @@ def env_int_base(key: str) -> int:
         raise RuntimeError(f"{key} must be an integer in runtime.env") from None
 
 
+def env_float_default(key: str, default: str) -> float:
+    raw_value = os.getenv(key, default)
+    value = raw_value.strip() or default
+    try:
+        return float(value)
+    except ValueError:
+        raise RuntimeError(f"{key} must be a number in runtime.env") from None
+
+
 def direction_sector(angle: int) -> dict[str, str]:
     code, label = DIRECTION_SECTORS[int(((angle + 22.5) % 360) // 45)]
     return {"code": code, "label": label}
@@ -68,7 +78,7 @@ def is_direction_query(text: str) -> bool:
 
 
 class ReSpeakerAudioSource:
-    TIMEOUT_MS = 100000
+    TIMEOUT_MS = 2000
 
     def __init__(self, dev: Any) -> None:
         self.dev = dev
@@ -78,7 +88,8 @@ class ReSpeakerAudioSource:
 
     def close(self) -> None:
         if usb is not None:
-            usb.util.dispose_resources(self.dev)
+            with self._lock:
+                usb.util.dispose_resources(self.dev)
 
     def read(self, name: str) -> int | float:
         parameter = PARAMETERS[name]
@@ -192,23 +203,18 @@ class ReSpeakerAudioSource:
         return f"您在我的{snapshot['label']}。"
 
 
-def open_respeaker() -> ReSpeakerAudioSource | None:
-    if not env_bool("RESPEAKER_ENABLED"):
-        log("respeaker control disabled")
-        return None
-    if usb is None:
-        log("respeaker control unavailable: pyusb is not installed", level="warning")
-        return None
-
+def _open_respeaker_once(*, log_missing: bool = True) -> ReSpeakerAudioSource | None:
     vendor_id = env_int_base("RESPEAKER_USB_VENDOR_ID")
     product_id = env_int_base("RESPEAKER_USB_PRODUCT_ID")
     try:
         dev = usb.core.find(idVendor=vendor_id, idProduct=product_id)
     except Exception as exc:
-        log(f"respeaker control unavailable: {exc}", level="warning")
+        if log_missing:
+            log(f"respeaker control unavailable: {exc}", level="warning")
         return None
     if dev is None:
-        log(f"respeaker control device not found: vid=0x{vendor_id:04x} pid=0x{product_id:04x}")
+        if log_missing:
+            log(f"respeaker control device not found: vid=0x{vendor_id:04x} pid=0x{product_id:04x}")
         return None
 
     source = ReSpeakerAudioSource(dev)
@@ -218,7 +224,85 @@ def open_respeaker() -> ReSpeakerAudioSource | None:
     return source
 
 
-def direction_answer(text: str, source: ReSpeakerAudioSource | None) -> str | None:
+class ReSpeakerAudioSourceManager:
+    def __init__(self, retry_seconds: float = 5.0) -> None:
+        self.retry_seconds = max(1.0, retry_seconds)
+        self._source: ReSpeakerAudioSource | None = None
+        self._lock = threading.Lock()
+        self._next_open_at = 0.0
+        self._last_missing_log_at = -30.0
+
+    def close(self) -> None:
+        with self._lock:
+            self._close_locked()
+
+    def _close_locked(self) -> None:
+        if self._source is not None:
+            self._source.close()
+            self._source = None
+
+    def _open_locked(self) -> ReSpeakerAudioSource | None:
+        if self._source is not None:
+            return self._source
+
+        now = time.monotonic()
+        if now < self._next_open_at:
+            return None
+
+        log_missing = now - self._last_missing_log_at >= 30.0
+        source = _open_respeaker_once(log_missing=log_missing)
+        if source is None:
+            if log_missing:
+                self._last_missing_log_at = now
+            self._next_open_at = now + self.retry_seconds
+            return None
+
+        self._source = source
+        self._next_open_at = 0.0
+        self._last_missing_log_at = 0.0
+        return source
+
+    def _drop_source(self, source: ReSpeakerAudioSource, reason: str) -> None:
+        with self._lock:
+            if self._source is source:
+                log(f"respeaker control lost; will retry: {reason}", level="warning")
+                self._close_locked()
+                self._next_open_at = time.monotonic() + self.retry_seconds
+
+    def snapshot(self) -> dict[str, Any]:
+        with self._lock:
+            source = self._open_locked()
+        if source is None:
+            return {
+                "ok": False,
+                "source": "respeaker",
+                "error": "unavailable",
+                "updated_at": time.time(),
+            }
+
+        snapshot = source.snapshot()
+        if not snapshot.get("ok"):
+            self._drop_source(source, str(snapshot.get("error") or "read failed"))
+        return snapshot
+
+    def answer_direction(self) -> str:
+        snapshot = self.snapshot()
+        if not snapshot.get("ok"):
+            return "我现在读不到麦克风方向信息。"
+        return f"您在我的{snapshot['label']}。"
+
+
+def open_respeaker() -> ReSpeakerAudioSourceManager | None:
+    if not env_bool("RESPEAKER_ENABLED"):
+        log("respeaker control disabled")
+        return None
+    if usb is None:
+        log("respeaker control unavailable: pyusb is not installed", level="warning")
+        return None
+    return ReSpeakerAudioSourceManager(env_float_default("RESPEAKER_RECONNECT_SECONDS", "5"))
+
+
+def direction_answer(text: str, source: ReSpeakerAudioSource | ReSpeakerAudioSourceManager | None) -> str | None:
     if not is_direction_query(text):
         return None
     if source is None:

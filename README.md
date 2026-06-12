@@ -217,7 +217,7 @@ EDGE_TTS_PROXY=
 
 `chat2me-speech` 是语音会话入口。它启动后会：
 
-1. 打开 ReSpeaker 控制接口，按配置写入 AGC、降噪、VAD、AEC 参数。
+1. 打开 ReSpeaker 控制接口，按配置写入 AGC、降噪、VAD、AEC 参数；麦克风、ReSpeaker 控制口和显示屏串口拔插后会按重试间隔重新发现设备。
 2. 用 Sherpa ONNX KWS 模型监听唤醒词。
 3. 唤醒后播放 `WAKE_RESPONSE`，进入多轮会话。
 4. 录音时先做噪声门限校准，再把音频送入远程 ASR 服务。

@@ -451,13 +451,18 @@ def run_session_thread(recognizer, voice, tts_config, display: SpeechState, beep
         WakeHandler.busy_lock.release()
 
 
-def listen_for_wake(kws, input_device: int | str | None, chunk: int, display: SpeechState) -> str:
+def listen_for_wake(kws, chunk: int, display: SpeechState) -> str:
     stream = kws.create_stream()
     matched = ""
     last_error_log = 0.0
+    logged_input_device: object = object()
     log(f"wake listener active: {wake_words_display()}")
 
     while not matched:
+        input_device = wait_for_input_device(display)
+        if input_device != logged_input_device:
+            log(f"input device: {input_device if input_device is not None else 'default'}")
+            logged_input_device = input_device
         try:
             with sd.InputStream(
                 channels=INPUT_CHANNELS,
@@ -492,7 +497,13 @@ def listen_for_wake(kws, input_device: int | str | None, chunk: int, display: Sp
 def wait_for_input_device(display: SpeechState) -> int | str | None:
     logged_waiting = False
     while True:
-        input_device = select_input_device(INPUT_DEVICE)
+        try:
+            input_device = select_input_device(INPUT_DEVICE)
+        except Exception as exc:
+            input_device = None
+            if not logged_waiting:
+                log(f"audio input device lookup failed; retrying: {exc}")
+                logged_waiting = True
         if input_device is not None or not INPUT_DEVICE_REQUIRED:
             return input_device
 
@@ -504,26 +515,25 @@ def wait_for_input_device(display: SpeechState) -> int | str | None:
 
 
 def run_embedded_wake_loop(recognizer, voice, tts_config, display: SpeechState, beep_path: Path, audio_source) -> None:
-    input_device = wait_for_input_device(display)
-    log(f"input device: {input_device if input_device is not None else 'default'}")
     log(f"loading wake-word model: {KWS_MODEL_DIR}")
     kws = create_kws()
     chunk = int(CHUNK_SECONDS * SAMPLE_RATE)
     display.set_state("idle")
 
     while True:
-        listen_for_wake(kws, input_device, chunk, display)
+        listen_for_wake(kws, chunk, display)
         if not WakeHandler.busy_lock.acquire(blocking=False):
             log("wake ignored because a session is already running")
             continue
         run_session_thread(recognizer, voice, tts_config, display, beep_path, audio_source)
 
 
-def open_session_input(input_device: int | str | None, chunk: int) -> sd.InputStream:
+def open_session_input(display: SpeechState, chunk: int) -> sd.InputStream:
     deadline = time.monotonic() + 5.0
     last_error: Exception | None = None
     while time.monotonic() < deadline:
         audio: sd.InputStream | None = None
+        input_device = wait_for_input_device(display)
         try:
             audio = sd.InputStream(
                 channels=INPUT_CHANNELS,
@@ -550,9 +560,8 @@ def open_session_input(input_device: int | str | None, chunk: int) -> sd.InputSt
 
 
 def run_session(recognizer, voice, tts_config, display: SpeechState, beep_path: Path, audio_source) -> None:
-    input_device = wait_for_input_device(display)
     chunk = int(CHUNK_SECONDS * SAMPLE_RATE)
-    audio = open_session_input(input_device, chunk)
+    audio = open_session_input(display, chunk)
     try:
         display.set_state("listening", "wake")
         speak_pausing_input(audio, WAKE_RESPONSE, voice, tts_config, display)

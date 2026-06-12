@@ -76,7 +76,7 @@ jobs:
         env:
           IMAGE_NAME: ${{ matrix.image }}
         run: |
-          date_tag="$(TZ=Asia/Shanghai date +%Y%m%d)"
+          date_tag="$(TZ=Asia/Shanghai git show -s --format=%cd --date=format-local:%Y%m%d HEAD)"
           image="${REGISTRY}/${IMAGE_NAMESPACE}/${IMAGE_NAME}"
           {
             echo "tags<<EOF"

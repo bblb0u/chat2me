@@ -50,6 +50,7 @@ services:
     command: ["python3", "-m", "app.main"]
     device_cgroup_rules:
       - "c 166:* rwm"
+      - "c 188:* rwm"
     volumes:
       - /dev:/host-dev
       - ./data/config:/app/config
@@ -107,9 +108,9 @@ services:
     image: gitwarp.pages.dev/bblb0u/chat2me-speech:latest
     container_name: chat2me-speech
     restart: unless-stopped
-    devices:
-      - /dev/snd:/dev/snd
-      - /dev/bus/usb:/dev/bus/usb
+    device_cgroup_rules:
+      - "c 116:* rwm"
+      - "c 189:* rwm"
     command: ["python3", "-m", "app.main"]
     environment:
       VOICE_ROLE: chat2me-speech
@@ -117,6 +118,10 @@ services:
       - ./data/models:/models
       - ./data/config:/app/config
       - ./data/log:/app/log
+      - /dev/snd:/dev/snd
+      - /dev/bus/usb:/dev/bus/usb
+      - /run/user:/host-run/user:ro
+      - /home:/host-home:ro
       - /etc/asound.conf:/etc/asound.conf:ro
     depends_on:
       chat2me-core:
