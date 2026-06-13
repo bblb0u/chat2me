@@ -17,15 +17,40 @@ except ImportError:  # pragma: no cover - handled at runtime in slim environment
 
 
 PARAMETERS = {
+    "AECFREEZEONOFF": (18, 7, "int", "rw"),
+    "AECNORM": (18, 19, "float", "rw"),
+    "HPFONOFF": (18, 27, "int", "rw"),
+    "RT60ONOFF": (18, 28, "int", "rw"),
+    "AECSILENCELEVEL": (18, 30, "float", "rw"),
     "AGCONOFF": (19, 0, "int", "rw"),
+    "AGCMAXGAIN": (19, 1, "float", "rw"),
+    "AGCDESIREDLEVEL": (19, 2, "float", "rw"),
+    "AGCGAIN": (19, 3, "float", "rw"),
+    "AGCTIME": (19, 4, "float", "rw"),
+    "CNIONOFF": (19, 5, "int", "rw"),
+    "FREEZEONOFF": (19, 6, "int", "rw"),
+    "STATNOISEONOFF": (19, 8, "int", "rw"),
+    "GAMMA_NS": (19, 9, "float", "rw"),
+    "MIN_NS": (19, 10, "float", "rw"),
+    "NONSTATNOISEONOFF": (19, 11, "int", "rw"),
+    "GAMMA_NN": (19, 12, "float", "rw"),
+    "MIN_NN": (19, 13, "float", "rw"),
     "ECHOONOFF": (19, 14, "int", "rw"),
+    "GAMMA_E": (19, 15, "float", "rw"),
+    "GAMMA_ETAIL": (19, 16, "float", "rw"),
+    "GAMMA_ENL": (19, 17, "float", "rw"),
     "NLATTENONOFF": (19, 18, "int", "rw"),
+    "NLAEC_MODE": (19, 20, "int", "rw"),
+    "TRANSIENTONOFF": (19, 29, "int", "rw"),
     "VOICEACTIVITY": (19, 32, "int", "ro"),
     "STATNOISEONOFF_SR": (19, 33, "int", "rw"),
     "NONSTATNOISEONOFF_SR": (19, 34, "int", "rw"),
     "GAMMA_NS_SR": (19, 35, "float", "rw"),
     "GAMMA_NN_SR": (19, 36, "float", "rw"),
+    "MIN_NS_SR": (19, 37, "float", "rw"),
+    "MIN_NN_SR": (19, 38, "float", "rw"),
     "GAMMAVAD_SR": (19, 39, "float", "rw"),
+    "SPEECHDETECTED": (19, 22, "int", "ro"),
     "DOAANGLE": (21, 0, "int", "ro"),
 }
 
@@ -60,6 +85,23 @@ def env_float_default(key: str, default: str) -> float:
         return float(value)
     except ValueError:
         raise RuntimeError(f"{key} must be a number in runtime.env") from None
+
+
+def optional_env_bool(name: str) -> int | None:
+    value = os.getenv(name)
+    if value is None or not value.strip():
+        return None
+    return int(env_bool(name))
+
+
+def optional_env_float(name: str) -> float | None:
+    value = os.getenv(name)
+    if value is None or not value.strip():
+        return None
+    try:
+        return float(value.strip())
+    except ValueError:
+        raise RuntimeError(f"{name} must be a number in runtime.env") from None
 
 
 def direction_sector(angle: int) -> dict[str, str]:
@@ -135,22 +177,52 @@ class ReSpeakerAudioSource:
         if not env_bool("RESPEAKER_TUNING_ENABLED"):
             return
 
-        writes: tuple[tuple[str, int | float], ...] = (
+        writes: list[tuple[str, int | float]] = [
+            ("HPFONOFF", env_int_base("RESPEAKER_HPF_MODE")),
             ("AGCONOFF", int(env_bool("RESPEAKER_AGC_ENABLED"))),
+            ("AGCMAXGAIN", env_float("RESPEAKER_AGC_MAX_GAIN")),
+            ("AGCDESIREDLEVEL", env_float("RESPEAKER_AGC_DESIRED_LEVEL")),
+            ("AGCTIME", env_float("RESPEAKER_AGC_TIME_SECONDS")),
+            ("STATNOISEONOFF", int(env_bool("RESPEAKER_STATIONARY_NOISE_SUPPRESSION"))),
+            ("NONSTATNOISEONOFF", int(env_bool("RESPEAKER_NONSTATIONARY_NOISE_SUPPRESSION"))),
+            ("GAMMA_NS", env_float("RESPEAKER_STATIONARY_NOISE_SUPPRESSION_LEVEL")),
+            ("GAMMA_NN", env_float("RESPEAKER_NONSTATIONARY_NOISE_SUPPRESSION_LEVEL")),
+            ("MIN_NS", env_float("RESPEAKER_STATIONARY_NOISE_SUPPRESSION_FLOOR")),
+            ("MIN_NN", env_float("RESPEAKER_NONSTATIONARY_NOISE_SUPPRESSION_FLOOR")),
             ("STATNOISEONOFF_SR", int(env_bool("RESPEAKER_ASR_STATIONARY_NOISE_SUPPRESSION"))),
             ("NONSTATNOISEONOFF_SR", int(env_bool("RESPEAKER_ASR_NONSTATIONARY_NOISE_SUPPRESSION"))),
             ("GAMMA_NS_SR", env_float("RESPEAKER_ASR_STATIONARY_NOISE_SUPPRESSION_LEVEL")),
             ("GAMMA_NN_SR", env_float("RESPEAKER_ASR_NONSTATIONARY_NOISE_SUPPRESSION_LEVEL")),
+            ("MIN_NS_SR", env_float("RESPEAKER_ASR_STATIONARY_NOISE_SUPPRESSION_FLOOR")),
+            ("MIN_NN_SR", env_float("RESPEAKER_ASR_NONSTATIONARY_NOISE_SUPPRESSION_FLOOR")),
             ("GAMMAVAD_SR", env_float("RESPEAKER_VAD_THRESHOLD_DB")),
             ("ECHOONOFF", int(env_bool("RESPEAKER_ECHO_SUPPRESSION_ENABLED"))),
+            ("GAMMA_E", env_float("RESPEAKER_ECHO_SUPPRESSION_LEVEL")),
+            ("GAMMA_ETAIL", env_float("RESPEAKER_ECHO_TAIL_SUPPRESSION_LEVEL")),
+            ("GAMMA_ENL", env_float("RESPEAKER_NONLINEAR_ECHO_SUPPRESSION_LEVEL")),
             ("NLATTENONOFF", int(env_bool("RESPEAKER_NONLINEAR_AEC_ENABLED"))),
+            ("NLAEC_MODE", env_int_base("RESPEAKER_NONLINEAR_AEC_MODE")),
+            ("TRANSIENTONOFF", int(env_bool("RESPEAKER_TRANSIENT_ECHO_SUPPRESSION_ENABLED"))),
+        ]
+        optional_writes: tuple[tuple[str, int | float | None], ...] = (
+            ("AECFREEZEONOFF", optional_env_bool("RESPEAKER_AEC_FREEZE_ENABLED")),
+            ("AECNORM", optional_env_float("RESPEAKER_AEC_NORM")),
+            ("RT60ONOFF", optional_env_bool("RESPEAKER_RT60_ENABLED")),
+            ("AECSILENCELEVEL", optional_env_float("RESPEAKER_AEC_SILENCE_LEVEL")),
+            ("AGCGAIN", optional_env_float("RESPEAKER_AGC_FIXED_GAIN")),
+            ("CNIONOFF", optional_env_bool("RESPEAKER_COMFORT_NOISE_ENABLED")),
+            ("FREEZEONOFF", optional_env_bool("RESPEAKER_BEAMFORMER_FREEZE_ENABLED")),
         )
+        writes.extend((name, value) for name, value in optional_writes if value is not None)
+
+        applied: dict[str, int | float] = {}
         for name, value in writes:
             try:
                 self.write(name, value)
+                applied[name] = value
             except Exception as exc:
                 log(f"respeaker tuning write failed: {name}={value}: {exc}", level="warning")
-        log("respeaker tuning applied")
+        log(f"respeaker tuning applied: {applied}")
 
     def normalize_angle(self, raw_angle: int) -> int:
         angle = (raw_angle - self.front_offset_degrees) % 360
@@ -177,6 +249,12 @@ class ReSpeakerAudioSource:
             log(f"respeaker voice activity read failed: {exc}", level="debug")
             voice_activity = None
 
+        try:
+            speech_detected: bool | None = bool(self.read("SPEECHDETECTED"))
+        except Exception as exc:
+            log(f"respeaker speech detected read failed: {exc}", level="debug")
+            speech_detected = None
+
         sector = direction_sector(angle)
         return {
             "ok": True,
@@ -186,6 +264,7 @@ class ReSpeakerAudioSource:
             "sector": sector["code"],
             "label": sector["label"],
             "voice_activity": voice_activity,
+            "speech_detected": speech_detected,
             "coordinate": {
                 "zero": "front",
                 "positive": "clockwise",
@@ -195,6 +274,13 @@ class ReSpeakerAudioSource:
             },
             "updated_at": now,
         }
+
+    def is_voice_active(self) -> bool | None:
+        try:
+            return bool(self.read("VOICEACTIVITY"))
+        except Exception as exc:
+            log(f"respeaker voice activity read failed: {exc}", level="debug")
+            return None
 
     def answer_direction(self) -> str:
         snapshot = self.snapshot()
@@ -290,6 +376,16 @@ class ReSpeakerAudioSourceManager:
         if not snapshot.get("ok"):
             return "我现在读不到麦克风方向信息。"
         return f"您在我的{snapshot['label']}。"
+
+    def is_voice_active(self) -> bool | None:
+        with self._lock:
+            source = self._open_locked()
+        if source is None:
+            return None
+        active = source.is_voice_active()
+        if active is None:
+            self._drop_source(source, "voice activity read failed")
+        return active
 
 
 def open_respeaker() -> ReSpeakerAudioSourceManager | None:

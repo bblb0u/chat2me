@@ -360,6 +360,8 @@ def direction_status(audio_source) -> dict[str, object]:
     return {
         "ok": True,
         "angle_degrees": snapshot.get("angle_degrees"),
+        "voice_activity": snapshot.get("voice_activity"),
+        "speech_detected": snapshot.get("speech_detected"),
         "updated_at": snapshot.get("updated_at", time.time()),
     }
 
@@ -371,6 +373,8 @@ def normalize_direction(direction: dict[str, object]) -> dict[str, object]:
         return {
             "ok": True,
             "angle_degrees": int(round(float(angle))) % 360,
+            "voice_activity": direction.get("voice_activity"),
+            "speech_detected": direction.get("speech_detected"),
             "updated_at": direction.get("updated_at") or time.time(),
         }
     return {
@@ -562,6 +566,7 @@ def open_session_input(display: SpeechState, chunk: int) -> sd.InputStream:
 def run_session(recognizer, voice, tts_config, display: SpeechState, beep_path: Path, audio_source) -> None:
     chunk = int(CHUNK_SECONDS * SAMPLE_RATE)
     audio = open_session_input(display, chunk)
+    voice_activity_probe = getattr(audio_source, "is_voice_active", None)
     try:
         display.set_state("listening", "wake")
         speak_pausing_input(audio, WAKE_RESPONSE, voice, tts_config, display)
@@ -569,7 +574,13 @@ def run_session(recognizer, voice, tts_config, display: SpeechState, beep_path: 
 
         for turn in range(1, MAX_SESSION_TURNS + 1):
             log(f"conversation turn {turn}/{MAX_SESSION_TURNS}")
-            command = listen_command(audio, beep_path, recognizer, play_ready_beep=False)
+            command = listen_command(
+                audio,
+                beep_path,
+                recognizer,
+                play_ready_beep=False,
+                voice_activity_probe=voice_activity_probe,
+            )
             if not command:
                 log("conversation idle timeout")
                 if SESSION_IDLE_RESPONSE:

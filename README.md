@@ -153,7 +153,7 @@ LLM_API_KEY=sk-...
 OLLAMA_MODEL=qwen3:4b-instruct
 ```
 
-默认本地 ASR/TTS：
+默认 ASR/TTS：
 
 ```env
 VOICE_ASR_ENGINE=sensevoice
@@ -162,8 +162,8 @@ SENSEVOICE_LANGUAGE=auto
 SENSEVOICE_USE_ITN=1
 ASR_HOMOPHONE_REPLACER_ENABLED=1
 ASR_HOMOPHONE_GENERATE_ON_START=1
-VOICE_TTS_ENGINE=melotts
-VOICE_TTS_MODEL=MeloTTS-Chinese
+VOICE_TTS_ENGINE=online
+VOICE_TTS_MODEL=edge-tts
 VOICE_TTS_DEVICE=auto
 MELOTTS_DISABLE_BERT=1
 ```
@@ -173,6 +173,10 @@ MELOTTS_DISABLE_BERT=1
 MeloTTS-Chinese 默认使用中文英文混合文本处理和内置中文说话人；普通部署不需要配置 language 或 speaker。
 
 Sherpa ONNX 的 KWS 和 SenseVoice ASR 使用 CPU 运行。SenseVoice 可启用 homophone replacer，在 ASR 输出后把同音识别结果替换成专有词；ASR 镜像内置 Pynini/OpenFST 生成环境，启动时读取中文 `homophones.yaml`，自动转拼音并生成 `/models/homophone/replace.fst`。生成失败会阻止 ASR 容器启动。MeloTTS 使用 PyTorch device，默认 `auto`，支持 `auto/cpu/cuda/gpu/cuda:<index>`。
+
+ReSpeaker Mic Array v3.0 按 Seeed 出厂 6 通道固件使用：`AUDIO_INPUT_CHANNELS=6`，并只抽取 `AUDIO_INPUT_CHANNEL_INDEX=0` 作为 KWS/ASR 输入。官方文档定义 channel 0 是 processed audio for ASR，channel 1-4 是原始麦克风，channel 5 是 merged playback。
+
+DOA/VAD 走 ReSpeaker USB tuning 接口并与官方 `tuning.py` 参数对齐：DOA 读取 `DOAANGLE`，VAD 读取 `VOICEACTIVITY`，VAD 阈值写入 `GAMMAVAD_SR`。录音门控默认启用硬件 VAD；`SPEECH_RMS_THRESHOLD` 和 ASR noise gate 作为兜底。
 
 在线 TTS，失败时回落本地：
 
@@ -218,10 +222,10 @@ EDGE_TTS_PROXY=
 `chat2me-speech` 是语音会话入口。它启动后会：
 
 1. 打开 ReSpeaker 控制接口，按配置写入 AGC、降噪、VAD、AEC 参数；麦克风、ReSpeaker 控制口和显示屏串口拔插后会按重试间隔重新发现设备。
-2. 用 Sherpa ONNX KWS 模型监听唤醒词。
+2. 按 6 通道打开 ReSpeaker 音频输入，只取 channel 0 给 Sherpa ONNX KWS 模型监听唤醒词。
 3. 唤醒后播放 `WAKE_RESPONSE`，进入多轮会话。
-4. 录音时先做噪声门限校准，再把音频送入远程 ASR 服务。
-5. 维护并暴露 `/state`，读取时会刷新当前方向；方向数据放在 `state.direction` 里。
+4. 录音时结合硬件 VAD、噪声门限校准和 ASR noise gate，再把音频送入远程 ASR 服务。
+5. 维护并暴露 `/state`，读取时会刷新当前 DOA/VAD；方向和 VAD 数据放在 `state.direction` 里。
 6. 其他问题调用 `chat2me-core`，拿到回答后调用远程 TTS 服务。
 7. 播放期间暂停输入流，避免扬声器声音被继续识别。
 
@@ -381,7 +385,7 @@ PY
 | `services/speech/Dockerfile` | 构建 Speech 镜像，默认 `VOICE_ROLE=chat2me-speech`，安装唤醒、麦克风输入、扬声器播放、ReSpeaker 和远程调用所需依赖。 |
 | `services/speech/requirements.txt` | Speech 服务基础 Python 依赖。 |
 | `services/speech/app/main.py` | Speech 服务入口：唤醒监听、会话循环、HTTP `/wake`、状态接口、诊断回合和远程 ASR/TTS 调用。 |
-| `services/speech/app/respeaker.py` | ReSpeaker USB 参数读写、降噪/AGC/AEC tuning、DOA 角度和方向话术。 |
+| `services/speech/app/respeaker.py` | ReSpeaker USB 参数读写、降噪/AGC/AEC/VAD tuning、DOA/VAD 读取和方向话术。 |
 
 ### services/relay
 
@@ -396,7 +400,7 @@ PY
 | 文件 | 作用 |
 | --- | --- |
 | `runtime/shared/common.py` | 各 Python 服务共享运行时工具：读取 `runtime.env`、环境变量解析、分级文件日志、串口显示客户端。 |
-| `runtime/shared/voice.py` | ASR/TTS/Speech 共享语音逻辑：模型创建、远程 ASR/TTS 适配、音频读写、噪声门限、播放、服务探活缓存。 |
+| `runtime/shared/voice.py` | ASR/TTS/Speech 共享语音逻辑：模型创建、远程 ASR/TTS 适配、ReSpeaker channel 0 音频读写、硬件 VAD/噪声门限、播放、服务探活缓存。 |
 | `runtime/entrypoints/config.sh` | Core 和 Relay 共用入口：首次启动时初始化 `/app/config`。 |
 | `runtime/entrypoints/audio.sh` | ASR/TTS/Speech 镜像入口：初始化配置、解析模型选择、下载/校验 KWS/ASR/TTS 模型。 |
 

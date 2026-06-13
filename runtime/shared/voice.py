@@ -13,7 +13,7 @@ from contextlib import redirect_stderr, redirect_stdout
 from itertools import chain
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Iterable, Protocol
+from typing import Any, Callable, Iterable, Protocol
 
 from app.common import DisplayClient, env_bool, env_float, env_int, env_value, log
 import numpy as np
@@ -76,15 +76,11 @@ OUTPUT_DEVICE = env_value("AUDIO_OUTPUT_DEVICE", allow_empty=True)
 SAMPLE_RATE = env_int("AUDIO_SAMPLE_RATE")
 CHUNK_SECONDS = env_float("AUDIO_CHUNK_SECONDS")
 INPUT_CHANNELS = env_int("AUDIO_INPUT_CHANNELS")
-INPUT_CHANNEL_INDEX_RAW = env_value("AUDIO_INPUT_CHANNEL_INDEX")
-INPUT_CHANNEL_INDEX_AUTO = INPUT_CHANNEL_INDEX_RAW.lower() == "auto"
-if INPUT_CHANNEL_INDEX_AUTO:
-    INPUT_CHANNEL_INDEX = 0
-else:
-    try:
-        INPUT_CHANNEL_INDEX = int(INPUT_CHANNEL_INDEX_RAW)
-    except ValueError:
-        raise RuntimeError("AUDIO_INPUT_CHANNEL_INDEX must be an integer or auto in runtime.env") from None
+if INPUT_CHANNELS != 6:
+    raise RuntimeError("AUDIO_INPUT_CHANNELS must be 6 for ReSpeaker Mic Array v3.0 factory firmware")
+INPUT_CHANNEL_INDEX = env_int("AUDIO_INPUT_CHANNEL_INDEX")
+if INPUT_CHANNEL_INDEX != 0:
+    raise RuntimeError("AUDIO_INPUT_CHANNEL_INDEX must be 0 for ReSpeaker Mic Array v3.0 ASR channel")
 KWS_THREADS = env_int("KWS_THREADS")
 ASR_THREADS = env_int("ASR_THREADS")
 SENSEVOICE_LANGUAGE = os.getenv("SENSEVOICE_LANGUAGE", "auto").strip().lower() or "auto"
@@ -110,6 +106,7 @@ ASR_NOISE_GATE_PERCENTILE = env_float("ASR_NOISE_GATE_PERCENTILE")
 ASR_NOISE_GATE_RATIO = env_float("ASR_NOISE_GATE_RATIO")
 ASR_NOISE_GATE_OFFSET = env_float("ASR_NOISE_GATE_OFFSET")
 ASR_PREROLL_SECONDS = env_float("ASR_PREROLL_SECONDS")
+RESPEAKER_VAD_GATE_ENABLED = env_bool("RESPEAKER_VAD_GATE_ENABLED")
 MELOTTS_LANGUAGE = "ZH_MIX_EN"
 MELOTTS_SPEAKER = "ZH"
 MELOTTS_SPEED = env_float("MELOTTS_SPEED")
@@ -952,13 +949,10 @@ def drain_audio(audio: Any, seconds: float) -> None:
 
 def mono(samples: np.ndarray) -> np.ndarray:
     if samples.ndim == 1:
-        return samples
-    if INPUT_CHANNEL_INDEX_AUTO:
-        channel_rms = np.sqrt(np.mean(np.square(samples), axis=0))
-        channel_index = int(np.argmax(channel_rms))
-        return samples[:, channel_index]
-    channel_index = min(max(INPUT_CHANNEL_INDEX, 0), samples.shape[1] - 1)
-    return samples[:, channel_index]
+        raise RuntimeError("expected 6-channel ReSpeaker v3.0 audio, got mono input")
+    if samples.shape[1] != INPUT_CHANNELS:
+        raise RuntimeError(f"expected {INPUT_CHANNELS}-channel ReSpeaker v3.0 audio, got {samples.shape[1]} channels")
+    return samples[:, INPUT_CHANNEL_INDEX]
 
 
 def read_mono(audio: Any, frames: int) -> np.ndarray:
@@ -990,6 +984,16 @@ def feed_asr(
     return last_text
 
 
+def hardware_vad_active(voice_activity_probe: Callable[[], bool | None] | None) -> bool | None:
+    if not RESPEAKER_VAD_GATE_ENABLED or voice_activity_probe is None:
+        return None
+    try:
+        return voice_activity_probe()
+    except Exception as exc:
+        log(f"respeaker VAD read failed: {exc}", level="debug")
+        return None
+
+
 def calibrate_asr_noise(audio: Any, frames: int) -> tuple[float, list[tuple[np.ndarray, float]]]:
     chunks: list[tuple[np.ndarray, float]] = []
     if not ASR_NOISE_GATE_ENABLED or ASR_NOISE_CALIBRATION_SECONDS <= 0:
@@ -1015,12 +1019,15 @@ def listen_command(
     ready_beep_path: Path | None,
     recognizer: StreamingRecognizer,
     play_ready_beep: bool = True,
+    voice_activity_probe: Callable[[], bool | None] | None = None,
 ) -> str:
     stream = recognizer.create_stream()
     chunk = int(CHUNK_SECONDS * SAMPLE_RATE)
     last_text = ""
     speech_started = False
     max_rms = 0.0
+    vad_active_chunks = 0
+    last_active_elapsed: float | None = None
     preroll_chunks = max(1, int(max(ASR_PREROLL_SECONDS, CHUNK_SECONDS) / CHUNK_SECONDS))
     pre_roll: deque[tuple[np.ndarray, float]] = deque(maxlen=preroll_chunks)
 
@@ -1044,7 +1051,10 @@ def listen_command(
         samples = read_mono(audio, chunk)
         rms = audio_rms(samples)
         max_rms = max(max_rms, rms)
-        active = rms >= gate_threshold
+        vad_active = hardware_vad_active(voice_activity_probe)
+        if vad_active:
+            vad_active_chunks += 1
+        active = rms >= gate_threshold or bool(vad_active)
 
         if ASR_NOISE_GATE_ENABLED:
             if not speech_started:
@@ -1063,11 +1073,19 @@ def listen_command(
             last_text = feed_asr(recognizer, stream, samples, last_text)
 
         elapsed = time.monotonic() - started
+        if active:
+            last_active_elapsed = elapsed
+
         if not speech_started and not last_text and elapsed >= COMMAND_LEADING_SILENCE_SECONDS:
             break
 
         if elapsed < max(COMMAND_MIN_SECONDS, COMMAND_INITIAL_GRACE_SECONDS):
             continue
+
+        if speech_started and last_active_elapsed is not None:
+            trailing = elapsed - last_active_elapsed
+            if trailing >= COMMAND_INITIAL_GRACE_SECONDS:
+                break
 
         if recognizer.is_endpoint(stream) and (speech_started or last_text):
             break
@@ -1079,7 +1097,7 @@ def listen_command(
     log(
         "asr finished: "
         f"text='{final_text}' speech_started={speech_started} max_rms={max_rms:.4f} "
-        f"elapsed={time.monotonic() - started:.1f}s"
+        f"vad_active_chunks={vad_active_chunks} elapsed={time.monotonic() - started:.1f}s"
     )
     return final_text
 
