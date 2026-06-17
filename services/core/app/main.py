@@ -141,7 +141,7 @@ MATCH_REMOVE_PATTERN = re.compile(r"[\s，。！？、,.!?;；:：\"'“”‘�
 
 
 def build_match_prefix_pattern() -> re.Pattern[str]:
-    prefixes = ("请问", "那个", "嗯", "啊", "你好", "您好", *WAKE_WORDS)
+    prefixes = ("请问", "你好", "您好", *WAKE_WORDS)
     escaped = "|".join(re.escape(prefix) for prefix in sorted(set(prefixes), key=len, reverse=True) if prefix)
     return re.compile(rf"^({escaped})+") if escaped else re.compile(r"a^")
 

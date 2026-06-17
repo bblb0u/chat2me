@@ -13,7 +13,7 @@ from contextlib import redirect_stderr, redirect_stdout
 from itertools import chain
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Callable, Iterable, Protocol
+from typing import Any, Callable, Iterable, Protocol, TypedDict
 
 from app.common import DisplayClient, env_bool, env_float, env_int, env_value, log
 import numpy as np
@@ -155,6 +155,11 @@ if not SESSION_END_PHRASES:
     raise RuntimeError("SESSION_END_PHRASES must contain at least one phrase in runtime.env")
 KWS_KEYWORDS_SCORE = env_float("KWS_KEYWORDS_SCORE")
 KWS_KEYWORDS_THRESHOLD = env_float("KWS_KEYWORDS_THRESHOLD")
+
+
+class VoiceActivityState(TypedDict):
+    voice_activity: bool | None
+    speech_detected: bool | None
 
 
 class StreamingRecognizer(Protocol):
@@ -984,14 +989,30 @@ def feed_asr(
     return last_text
 
 
-def hardware_vad_active(voice_activity_probe: Callable[[], bool | None] | None) -> bool | None:
+def empty_voice_activity_state() -> VoiceActivityState:
+    return {"voice_activity": None, "speech_detected": None}
+
+
+def read_voice_activity_state(
+    voice_activity_probe: Callable[[], VoiceActivityState | bool | None] | None,
+) -> VoiceActivityState:
     if not RESPEAKER_VAD_GATE_ENABLED or voice_activity_probe is None:
-        return None
+        return empty_voice_activity_state()
     try:
-        return voice_activity_probe()
+        activity = voice_activity_probe()
     except Exception as exc:
-        log(f"respeaker VAD read failed: {exc}", level="debug")
-        return None
+        log(f"respeaker voice activity read failed: {exc}", level="debug")
+        return empty_voice_activity_state()
+
+    if isinstance(activity, dict):
+        return {
+            "voice_activity": activity.get("voice_activity"),
+            "speech_detected": activity.get("speech_detected"),
+        }
+    return {
+        "voice_activity": activity,
+        "speech_detected": None,
+    }
 
 
 def calibrate_asr_noise(audio: Any, frames: int) -> tuple[float, list[tuple[np.ndarray, float]]]:
@@ -1009,7 +1030,7 @@ def calibrate_asr_noise(audio: Any, frames: int) -> tuple[float, list[tuple[np.n
 
     percentile = min(max(ASR_NOISE_GATE_PERCENTILE, 0.0), 100.0)
     noise_floor = float(np.percentile([rms for _, rms in chunks], percentile))
-    threshold = max(SPEECH_RMS_THRESHOLD, noise_floor * ASR_NOISE_GATE_RATIO + ASR_NOISE_GATE_OFFSET)
+    threshold = max(SPEECH_RMS_THRESHOLD, noise_floor * (1.0 + ASR_NOISE_GATE_RATIO) + ASR_NOISE_GATE_OFFSET)
     log(f"asr noise gate: floor={noise_floor:.4f} threshold={threshold:.4f}")
     return threshold, chunks
 
@@ -1019,14 +1040,16 @@ def listen_command(
     ready_beep_path: Path | None,
     recognizer: StreamingRecognizer,
     play_ready_beep: bool = True,
-    voice_activity_probe: Callable[[], bool | None] | None = None,
+    voice_activity_probe: Callable[[], VoiceActivityState | bool | None] | None = None,
 ) -> str:
     stream = recognizer.create_stream()
     chunk = int(CHUNK_SECONDS * SAMPLE_RATE)
     last_text = ""
     speech_started = False
     max_rms = 0.0
+    rms_active_chunks = 0
     vad_active_chunks = 0
+    speech_detected_chunks = 0
     last_active_elapsed: float | None = None
     preroll_chunks = max(1, int(max(ASR_PREROLL_SECONDS, CHUNK_SECONDS) / CHUNK_SECONDS))
     pre_roll: deque[tuple[np.ndarray, float]] = deque(maxlen=preroll_chunks)
@@ -1051,10 +1074,17 @@ def listen_command(
         samples = read_mono(audio, chunk)
         rms = audio_rms(samples)
         max_rms = max(max_rms, rms)
-        vad_active = hardware_vad_active(voice_activity_probe)
+        activity_state = read_voice_activity_state(voice_activity_probe)
+        vad_active = activity_state["voice_activity"]
+        speech_detected = activity_state["speech_detected"]
+        rms_active = rms >= gate_threshold
+        if rms_active:
+            rms_active_chunks += 1
         if vad_active:
             vad_active_chunks += 1
-        active = rms >= gate_threshold or bool(vad_active)
+        if speech_detected:
+            speech_detected_chunks += 1
+        active = rms_active or bool(vad_active) or bool(speech_detected)
 
         if ASR_NOISE_GATE_ENABLED:
             if not speech_started:
@@ -1092,12 +1122,22 @@ def listen_command(
 
     recognizer.input_finished(stream)
     final_text = (decode_ready_asr(recognizer, stream) or last_text).strip()
+    control_activity_available = voice_activity_probe is not None and (vad_active_chunks > 0 or speech_detected_chunks > 0)
+    if final_text and voice_activity_probe is not None and not control_activity_available and rms_active_chunks <= 1:
+        log(
+            "asr rejected without voice evidence: "
+            f"text='{final_text}' rms_active_chunks={rms_active_chunks} "
+            f"vad_active_chunks={vad_active_chunks} speech_detected_chunks={speech_detected_chunks}",
+            level="info",
+        )
+        final_text = ""
     del stream
     gc.collect()
     log(
         "asr finished: "
         f"text='{final_text}' speech_started={speech_started} max_rms={max_rms:.4f} "
-        f"vad_active_chunks={vad_active_chunks} elapsed={time.monotonic() - started:.1f}s"
+        f"rms_active_chunks={rms_active_chunks} vad_active_chunks={vad_active_chunks} "
+        f"speech_detected_chunks={speech_detected_chunks} elapsed={time.monotonic() - started:.1f}s"
     )
     return final_text
 

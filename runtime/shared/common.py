@@ -215,6 +215,7 @@ class DisplayClient:
                         serial_conn.open()
                         serial_conn.dtr = False
                         serial_conn.rts = False
+                        serial_conn.reset_input_buffer()
                         serial_conn.reset_output_buffer()
                     except serial.SerialException:
                         try:
@@ -223,6 +224,7 @@ class DisplayClient:
                             pass
                         raise
                     self._serial = serial_conn
+                    log(f"display serial opened: {port}")
                     time.sleep(0.25)
                 written = self._serial.write(line)
                 self._serial.flush()
@@ -230,7 +232,7 @@ class DisplayClient:
                     raise serial.SerialTimeoutException(
                         f"display serial partial write: {written}/{len(line)} bytes"
                     )
-            except serial.SerialException as exc:
+            except (serial.SerialException, OSError) as exc:
                 log(f"display serial write failed: {exc}", level="warning")
                 self._close_locked()
                 self._disabled_until = time.monotonic() + self.retry_seconds

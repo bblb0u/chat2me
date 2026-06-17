@@ -243,17 +243,9 @@ class ReSpeakerAudioSource:
                 "updated_at": now,
             }
 
-        try:
-            voice_activity: bool | None = bool(self.read("VOICEACTIVITY"))
-        except Exception as exc:
-            log(f"respeaker voice activity read failed: {exc}", level="debug")
-            voice_activity = None
-
-        try:
-            speech_detected: bool | None = bool(self.read("SPEECHDETECTED"))
-        except Exception as exc:
-            log(f"respeaker speech detected read failed: {exc}", level="debug")
-            speech_detected = None
+        activity = self.activity_state()
+        voice_activity = activity["voice_activity"]
+        speech_detected = activity["speech_detected"]
 
         sector = direction_sector(angle)
         return {
@@ -275,12 +267,26 @@ class ReSpeakerAudioSource:
             "updated_at": now,
         }
 
-    def is_voice_active(self) -> bool | None:
+    def activity_state(self) -> dict[str, bool | None]:
         try:
-            return bool(self.read("VOICEACTIVITY"))
+            voice_activity: bool | None = bool(self.read("VOICEACTIVITY"))
         except Exception as exc:
             log(f"respeaker voice activity read failed: {exc}", level="debug")
-            return None
+            voice_activity = None
+
+        try:
+            speech_detected: bool | None = bool(self.read("SPEECHDETECTED"))
+        except Exception as exc:
+            log(f"respeaker speech detected read failed: {exc}", level="debug")
+            speech_detected = None
+
+        return {
+            "voice_activity": voice_activity,
+            "speech_detected": speech_detected,
+        }
+
+    def is_voice_active(self) -> bool | None:
+        return self.activity_state()["voice_activity"]
 
     def answer_direction(self) -> str:
         snapshot = self.snapshot()
@@ -386,6 +392,16 @@ class ReSpeakerAudioSourceManager:
         if active is None:
             self._drop_source(source, "voice activity read failed")
         return active
+
+    def activity_state(self) -> dict[str, bool | None]:
+        with self._lock:
+            source = self._open_locked()
+        if source is None:
+            return {"voice_activity": None, "speech_detected": None}
+        activity = source.activity_state()
+        if activity["voice_activity"] is None and activity["speech_detected"] is None:
+            self._drop_source(source, "activity state read failed")
+        return activity
 
 
 def open_respeaker() -> ReSpeakerAudioSourceManager | None:

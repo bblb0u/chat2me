@@ -566,7 +566,7 @@ def open_session_input(display: SpeechState, chunk: int) -> sd.InputStream:
 def run_session(recognizer, voice, tts_config, display: SpeechState, beep_path: Path, audio_source) -> None:
     chunk = int(CHUNK_SECONDS * SAMPLE_RATE)
     audio = open_session_input(display, chunk)
-    voice_activity_probe = getattr(audio_source, "is_voice_active", None)
+    voice_activity_probe = getattr(audio_source, "activity_state", None) or getattr(audio_source, "is_voice_active", None)
     try:
         display.set_state("listening", "wake")
         speak_pausing_input(audio, WAKE_RESPONSE, voice, tts_config, display)

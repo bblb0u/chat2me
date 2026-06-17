@@ -9,6 +9,7 @@
 #include "esp_io_expander_tca9554.h"
 #include "esp_lcd_panel_ops.h"
 #include "esp_log.h"
+#include "esp_system.h"
 #include "logo_mark_data.h"
 #include "lv_port.h"
 
@@ -22,10 +23,14 @@
 #define BOOT_PATTERN_MS 120
 #define BOOT_PATTERN_LINES 32
 #define DISPLAY_LINE_SIZE 512
+#define DISPLAY_BRIGHTNESS 100
 #define THINKING_TIMEOUT_MS 15000
 #define ANIMATION_FRAME_MS 33
 #define STARTUP_REFRESH_COUNT 8
 #define STARTUP_REFRESH_DELAY_MS 140
+#define UI_INIT_RETRY_COUNT 60
+#define UI_INIT_LOCK_TIMEOUT_MS 500
+#define UI_INIT_RETRY_DELAY_MS 100
 
 static const char *TAG = "chat2me_display";
 
@@ -35,6 +40,7 @@ static esp_lcd_panel_handle_t panel_handle = NULL;
 static lv_disp_t *lvgl_disp = NULL;
 
 static lv_obj_t *root = NULL;
+static bool ui_ready = false;
 
 static char current_state[24] = "idle";
 static uint32_t state_changed_ms = 0;
@@ -43,6 +49,10 @@ static lv_color_t color_bg = lv_color_hex(0x020607);
 
 extern "C" void app_main(void);
 void lv_port_init(void);
+static void set_display_state_locked(const char *state);
+static void apply_state_ui(void);
+static void animate_cb(lv_timer_t *timer);
+static void force_display_refresh_locked(void);
 
 static void draw_boot_pattern(void)
 {
@@ -133,7 +143,6 @@ static uint8_t *logo_pixels = NULL;
 static int logo_base_x = 0;
 static int logo_base_y = 0;
 static int logo_current_zoom = 256;
-static int logo_current_opa = LV_OPA_COVER;
 static uint32_t last_anim_ms = 0;
 
 static void fill_logo_pixels(void)
@@ -188,36 +197,29 @@ static void render_logo_animation(uint32_t now)
     int follow = elapsed > 120 ? 4 : 8;
 
     int zoom = 256;
-    int opa = LV_OPA_COVER;
 
     if (listening) {
         zoom = 258 + wave_value(now, 3200, 20, 5);
-        opa = 248 + wave_value(now, 3000, 90, 5);
     } else if (thinking) {
         zoom = 257 + wave_value(now, 4600, 0, 8) + wave_value(now, 7200, 120, 3);
-        opa = 238 + wave_value(now, 5200, 60, 10);
     } else if (speaking) {
         int cycle = eased_cycle(now, 1650, 0);
         int breathe = cycle < 128 ? cycle : 255 - cycle;
         zoom = 257 + breathe * 16 / 128 + wave_value(now, 2600, 45, 3);
-        opa = 244 + breathe * 10 / 128;
     } else if (error) {
         int pulse = eased_cycle(now, 1050, 0);
         int breathe = pulse < 128 ? pulse : 255 - pulse;
         zoom = 256 + breathe * 12 / 128;
-        opa = 208 + breathe * 44 / 128;
     }
 
     logo_current_zoom = smooth_follow(logo_current_zoom, zoom, follow);
-    logo_current_opa = smooth_follow(logo_current_opa, opa, follow);
 
     int current_zoom = active ? clamp_int(logo_current_zoom, 250, 278) : 256;
-    int current_opa = active ? clamp_int(logo_current_opa, 150, 255) : LV_OPA_COVER;
 
     lv_obj_set_pos(logo_img, logo_base_x, logo_base_y);
     lv_img_set_angle(logo_img, 0);
     lv_img_set_zoom(logo_img, (uint16_t)current_zoom);
-    lv_obj_set_style_img_opa(logo_img, (lv_opa_t)current_opa, 0);
+    lv_obj_set_style_img_opa(logo_img, LV_OPA_COVER, 0);
     lv_obj_invalidate(logo_img);
 }
 
@@ -266,8 +268,40 @@ static void build_ui(void)
     logo_base_x = logo_x;
     logo_base_y = logo_y;
     logo_current_zoom = 256;
-    logo_current_opa = LV_OPA_COVER;
     create_logo_mark(logo_x, logo_y);
+}
+
+static void ensure_ui_ready_locked(void)
+{
+    if (ui_ready) {
+        return;
+    }
+
+    build_ui();
+    set_display_state_locked("idle");
+    apply_state_ui();
+    lv_timer_create(animate_cb, ANIMATION_FRAME_MS, NULL);
+    animate_cb(NULL);
+    force_display_refresh_locked();
+    ui_ready = true;
+    ESP_LOGI(TAG, "ui ready");
+}
+
+static bool initialize_ui_with_retry(void)
+{
+    for (int attempt = 1; attempt <= UI_INIT_RETRY_COUNT; ++attempt) {
+        if (lvgl_port_lock(UI_INIT_LOCK_TIMEOUT_MS)) {
+            ensure_ui_ready_locked();
+            force_display_refresh_locked();
+            lvgl_port_unlock();
+            return true;
+        }
+
+        ESP_LOGW(TAG, "ui init lock timeout, retry %d/%d", attempt, UI_INIT_RETRY_COUNT);
+        vTaskDelay(pdMS_TO_TICKS(UI_INIT_RETRY_DELAY_MS));
+    }
+
+    return false;
 }
 
 static void set_display_state_locked(const char *state)
@@ -315,10 +349,12 @@ static void startup_refresh_task(void *arg)
             if (err != ESP_OK) {
                 ESP_LOGW(TAG, "display on retry failed: %s", esp_err_to_name(err));
             }
+            ensure_ui_ready_locked();
             apply_state_ui();
             animate_cb(NULL);
             force_display_refresh_locked();
             lvgl_port_unlock();
+            bsp_display_set_brightness(DISPLAY_BRIGHTNESS);
         }
     }
     vTaskDelete(NULL);
@@ -354,8 +390,10 @@ static void handle_line(const char *line)
     }
 
     if (lvgl_port_lock(100)) {
+        ensure_ui_ready_locked();
         set_display_state_locked(state);
         apply_state_ui();
+        force_display_refresh_locked();
         lvgl_port_unlock();
     }
 }
@@ -378,24 +416,19 @@ extern "C" void app_main(void)
 
     ESP_ERROR_CHECK(bsp_axp2101_init(i2c_bus_handle));
     io_expander_init(i2c_bus_handle);
-    bsp_display_init(&io_handle, &panel_handle, LCD_TRANSFER_BYTES);
     bsp_display_brightness_init();
-    bsp_display_set_brightness(100);
+    bsp_display_set_brightness(0);
+    bsp_display_init(&io_handle, &panel_handle, LCD_TRANSFER_BYTES);
     draw_boot_pattern();
 
     lv_port_init();
     ESP_LOGI(TAG, "serial status input ready on console stdin");
 
-    if (lvgl_port_lock(0)) {
-        build_ui();
-        set_display_state_locked("idle");
-        apply_state_ui();
-        lv_timer_create(animate_cb, ANIMATION_FRAME_MS, NULL);
-        animate_cb(NULL);
-        force_display_refresh_locked();
-        lvgl_port_unlock();
-        ESP_LOGI(TAG, "ui ready");
+    if (!initialize_ui_with_retry()) {
+        ESP_LOGE(TAG, "ui init failed after retries, restarting");
+        esp_restart();
     }
+    bsp_display_set_brightness(DISPLAY_BRIGHTNESS);
 
     xTaskCreate(startup_refresh_task, "display_startup_refresh", 4096, NULL, 5, NULL);
     xTaskCreate(uart_task, "uart_status", 4096, NULL, 8, NULL);
