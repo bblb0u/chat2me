@@ -33,6 +33,7 @@ extern "C" {
 #endif
 
 void bsp_display_init(esp_lcd_panel_io_handle_t *io_handle, esp_lcd_panel_handle_t *panel_handle, size_t max_transfer_sz);
+void bsp_display_backlight_force_off(void);
 void bsp_display_brightness_init(void);
 void bsp_display_set_brightness(uint8_t brightness);
 uint8_t bsp_display_get_brightness(void);

@@ -27,4 +27,4 @@ idf.py -p /dev/ttyACM0 flash
 
 Use ESP-IDF 5.5.x for this board. The Waveshare examples require ESP-IDF 5.4.0 or newer, and this firmware has been verified with ESP-IDF 5.5.4. This board uses an ST7796 LCD controller.
 
-The boot sequence clears the panel to black before the Chat2Me status UI starts. Status updates are normally forwarded by the optional `chat2me-relay` container.
+The boot sequence forces the backlight off before PMU/LCD initialization, clears the panel to black, renders the first Chat2Me status frame, and only then enables the backlight. Status updates are normally forwarded by the optional `chat2me-relay` container.

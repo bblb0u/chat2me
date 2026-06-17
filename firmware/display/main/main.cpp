@@ -41,6 +41,7 @@ static lv_disp_t *lvgl_disp = NULL;
 
 static lv_obj_t *root = NULL;
 static bool ui_ready = false;
+static bool backlight_enabled = false;
 
 static char current_state[24] = "idle";
 static uint32_t state_changed_ms = 0;
@@ -354,7 +355,10 @@ static void startup_refresh_task(void *arg)
             animate_cb(NULL);
             force_display_refresh_locked();
             lvgl_port_unlock();
-            bsp_display_set_brightness(DISPLAY_BRIGHTNESS);
+            if (!backlight_enabled) {
+                bsp_display_set_brightness(DISPLAY_BRIGHTNESS);
+                backlight_enabled = true;
+            }
         }
     }
     vTaskDelete(NULL);
@@ -412,6 +416,8 @@ static void uart_task(void *arg)
 
 extern "C" void app_main(void)
 {
+    bsp_display_backlight_force_off();
+
     i2c_master_bus_handle_t i2c_bus_handle = bsp_i2c_init();
 
     ESP_ERROR_CHECK(bsp_axp2101_init(i2c_bus_handle));
@@ -429,6 +435,7 @@ extern "C" void app_main(void)
         esp_restart();
     }
     bsp_display_set_brightness(DISPLAY_BRIGHTNESS);
+    backlight_enabled = true;
 
     xTaskCreate(startup_refresh_task, "display_startup_refresh", 4096, NULL, 5, NULL);
     xTaskCreate(uart_task, "uart_status", 4096, NULL, 8, NULL);

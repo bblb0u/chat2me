@@ -15,6 +15,19 @@ static const char *TAG = "bsp_display";
 
 static uint8_t g_brightness = 0;
 
+void bsp_display_backlight_force_off(void)
+{
+    gpio_config_t bl_gpio = {};
+    bl_gpio.pin_bit_mask = 1ULL << EXAMPLE_PIN_LCD_BL;
+    bl_gpio.mode = GPIO_MODE_OUTPUT;
+    bl_gpio.pull_up_en = GPIO_PULLUP_DISABLE;
+    bl_gpio.pull_down_en = GPIO_PULLDOWN_ENABLE;
+    bl_gpio.intr_type = GPIO_INTR_DISABLE;
+    ESP_ERROR_CHECK(gpio_config(&bl_gpio));
+    ESP_ERROR_CHECK(gpio_set_level(EXAMPLE_PIN_LCD_BL, 0));
+    g_brightness = 0;
+}
+
 void bsp_display_init(esp_lcd_panel_io_handle_t *io_handle, esp_lcd_panel_handle_t *panel_handle, size_t max_transfer_sz)
 {
     ESP_LOGI(TAG, "SPI bus init for ST7796");
@@ -57,6 +70,8 @@ void bsp_display_init(esp_lcd_panel_io_handle_t *io_handle, esp_lcd_panel_handle
 
 void bsp_display_brightness_init(void)
 {
+    bsp_display_backlight_force_off();
+
     ledc_timer_config_t ledc_timer = {};
     ledc_timer.speed_mode = LCD_BL_LEDC_MODE;
     ledc_timer.timer_num = LCD_BL_LEDC_TIMER;
