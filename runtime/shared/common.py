@@ -202,8 +202,28 @@ class DisplayClient:
                     port = self._resolve_port()
                     if not port:
                         raise serial.SerialException("display serial port unavailable")
-                    self._serial = serial.Serial(port, self.baud, timeout=0, write_timeout=1)
-                    time.sleep(0.1)
+                    serial_conn = serial.Serial()
+                    serial_conn.port = port
+                    serial_conn.baudrate = self.baud
+                    serial_conn.timeout = 0
+                    serial_conn.write_timeout = 1
+                    serial_conn.rtscts = False
+                    serial_conn.dsrdtr = False
+                    serial_conn.dtr = False
+                    serial_conn.rts = False
+                    try:
+                        serial_conn.open()
+                        serial_conn.dtr = False
+                        serial_conn.rts = False
+                        serial_conn.reset_output_buffer()
+                    except serial.SerialException:
+                        try:
+                            serial_conn.close()
+                        except Exception:
+                            pass
+                        raise
+                    self._serial = serial_conn
+                    time.sleep(0.25)
                 written = self._serial.write(line)
                 self._serial.flush()
                 if written != len(line):

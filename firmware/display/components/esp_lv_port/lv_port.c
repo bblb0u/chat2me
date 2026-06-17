@@ -19,10 +19,6 @@
 #include "lv_port.h"
 #include "lvgl.h"
 
-#ifdef ESP_LVGL_PORT_TOUCH_COMPONENT
-#include "esp_lcd_touch.h"
-#endif
-
 #if (ESP_IDF_VERSION < ESP_IDF_VERSION_VAL(4, 4, 4)) || (ESP_IDF_VERSION == ESP_IDF_VERSION_VAL(5, 0, 0))
 #define LVGL_PORT_HANDLE_FLUSH_READY 0
 #else
@@ -57,14 +53,6 @@ typedef struct {
     lvgl_port_wait_cb         draw_wait_cb;     /* Callback function for drawing */
 } lvgl_port_display_ctx_t;
 
-#ifdef ESP_LVGL_PORT_TOUCH_COMPONENT
-typedef struct {
-    esp_lcd_touch_handle_t  handle;        /* LCD touch IO handle */
-    lv_indev_drv_t          indev_drv;     /* LVGL input device driver */
-    lvgl_port_wait_cb       touch_wait_cb;  /* Callback function for touch */
-} lvgl_port_touch_ctx_t;
-#endif
-
 /*******************************************************************************
 * Local variables
 *******************************************************************************/
@@ -83,9 +71,6 @@ static void lvgl_port_task_deinit(void);
 static bool lvgl_port_flush_ready_callback(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_io_event_data_t *edata, void *user_ctx);
 #endif
 static void lvgl_port_flush_callback(lv_disp_drv_t *drv, const lv_area_t *area, lv_color_t *color_map);
-#ifdef ESP_LVGL_PORT_TOUCH_COMPONENT
-static void lvgl_port_touchpad_read(lv_indev_drv_t *indev_drv, lv_indev_data_t *data);
-#endif
 /*******************************************************************************
 * Public API functions
 *******************************************************************************/
@@ -301,49 +286,6 @@ esp_err_t lvgl_port_remove_disp(lv_disp_t *disp)
 
     return ESP_OK;
 }
-
-#ifdef ESP_LVGL_PORT_TOUCH_COMPONENT
-lv_indev_t *lvgl_port_add_touch(const lvgl_port_touch_cfg_t *touch_cfg)
-{
-    assert(touch_cfg != NULL);
-    assert(touch_cfg->disp != NULL);
-    assert(touch_cfg->handle != NULL);
-
-    /* Touch context */
-    lvgl_port_touch_ctx_t *touch_ctx = malloc(sizeof(lvgl_port_touch_ctx_t));
-    if (touch_ctx == NULL) {
-        ESP_LOGE(TAG, "Not enough memory for touch context allocation!");
-        return NULL;
-    }
-    touch_ctx->handle = touch_cfg->handle;
-    touch_ctx->touch_wait_cb = touch_cfg->touch_wait_cb;
-
-    /* Register a touchpad input device */
-    lv_indev_drv_init(&touch_ctx->indev_drv);
-    touch_ctx->indev_drv.type = LV_INDEV_TYPE_POINTER;
-    touch_ctx->indev_drv.disp = touch_cfg->disp;
-    touch_ctx->indev_drv.read_cb = lvgl_port_touchpad_read;
-    touch_ctx->indev_drv.user_data = touch_ctx;
-    return lv_indev_drv_register(&touch_ctx->indev_drv);
-}
-
-esp_err_t lvgl_port_remove_touch(lv_indev_t *touch)
-{
-    assert(touch);
-    lv_indev_drv_t *indev_drv = touch->driver;
-    assert(indev_drv);
-    lvgl_port_touch_ctx_t *touch_ctx = (lvgl_port_touch_ctx_t *)indev_drv->user_data;
-
-    /* Remove input device driver */
-    lv_indev_delete(touch);
-
-    if (touch_ctx) {
-        free(touch_ctx);
-    }
-
-    return ESP_OK;
-}
-#endif
 
 bool lvgl_port_lock(uint32_t timeout_ms)
 {
@@ -570,39 +512,6 @@ static void lvgl_port_flush_callback(lv_disp_drv_t *drv, const lv_area_t *area, 
     }
     lv_disp_flush_ready(drv);
 }
-
-#ifdef ESP_LVGL_PORT_TOUCH_COMPONENT
-static void lvgl_port_touchpad_read(lv_indev_drv_t *indev_drv, lv_indev_data_t *data)
-{
-    assert(indev_drv);
-    lvgl_port_touch_ctx_t *touch_ctx = (lvgl_port_touch_ctx_t *)indev_drv->user_data;
-    assert(touch_ctx->handle);
-
-    esp_lcd_touch_point_data_t touchpad_data[1] = {};
-    uint8_t touchpad_cnt = 0;
-
-    /* Read data from touch controller into memory */
-    bool touch_int = true;
-    if (touch_ctx->touch_wait_cb) {
-        touch_int = touch_ctx->touch_wait_cb(touch_ctx->handle->config.user_data);
-    }
-    if (touch_int) {
-        esp_lcd_touch_read_data(touch_ctx->handle);
-        /* Read data from touch controller */
-        esp_err_t err = esp_lcd_touch_get_data(touch_ctx->handle, touchpad_data, &touchpad_cnt, 1);
-        bool touchpad_pressed = (err == ESP_OK) && (touchpad_cnt > 0);
-
-        if (touchpad_pressed) {
-            data->point.x = touchpad_data[0].x;
-            data->point.y = touchpad_data[0].y;
-            data->state = LV_INDEV_STATE_PRESSED;
-            printf("Touchpad pressed: %d, x: %d, y: %d\n", touchpad_pressed, data->point.x, data->point.y);
-        } else {
-            data->state = LV_INDEV_STATE_RELEASED;
-        }
-    }
-}
-#endif
 
 static void lvgl_port_tick_increment(void *arg)
 {

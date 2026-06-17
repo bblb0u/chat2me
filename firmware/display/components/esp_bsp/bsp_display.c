@@ -8,6 +8,8 @@
 #include "esp_lcd_panel_ops.h"
 #include "esp_lcd_st7796.h"
 #include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 static const char *TAG = "bsp_display";
 
@@ -44,10 +46,13 @@ void bsp_display_init(esp_lcd_panel_io_handle_t *io_handle, esp_lcd_panel_handle
     ESP_ERROR_CHECK(esp_lcd_new_panel_st7796(*io_handle, &panel_config, panel_handle));
 
     ESP_ERROR_CHECK(esp_lcd_panel_reset(*panel_handle));
+    vTaskDelay(pdMS_TO_TICKS(20));
     ESP_ERROR_CHECK(esp_lcd_panel_init(*panel_handle));
+    vTaskDelay(pdMS_TO_TICKS(120));
     ESP_ERROR_CHECK(esp_lcd_panel_invert_color(*panel_handle, true));
     ESP_ERROR_CHECK(esp_lcd_panel_mirror(*panel_handle, true, false));
     ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(*panel_handle, true));
+    vTaskDelay(pdMS_TO_TICKS(80));
 }
 
 void bsp_display_brightness_init(void)

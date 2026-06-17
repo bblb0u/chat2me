@@ -1,6 +1,6 @@
 # Chat2Me
 
-Chat2Me 是一套部署在机器人硬件上的中文语音交互系统，默认面向 NVIDIA Jetson / ARM64 平台。典型外设包括 ReSpeaker 麦克风阵列、ALSA 扬声器和 ESP32-S3 触摸屏。
+Chat2Me 是一套部署在机器人硬件上的中文语音交互系统，默认面向 NVIDIA Jetson / ARM64 平台。典型外设包括 ReSpeaker 麦克风阵列、ALSA 扬声器和 ESP32-S3 状态屏。
 
 系统按职责拆分为唤醒、语音识别、对话编排、LLM、语音合成、声源方向和外设状态同步等服务，通过 Docker Compose 组合运行。LLM 支持本地 Ollama 和 OpenAI-compatible 在线服务；ASR 使用 Sherpa ONNX SenseVoice；TTS 支持本地 MeloTTS，也可以通过第三方 `edge-tts` 包调用 Microsoft Edge 在线语音服务，在线不可用时回落到本地模型。
 
@@ -11,7 +11,7 @@ Chat2Me 是一套部署在机器人硬件上的中文语音交互系统，默认
 - NVIDIA Jetson / ARM64，Docker 使用 NVIDIA runtime。
 - ReSpeaker USB 麦克风阵列，用于唤醒、录音、声源方向和降噪参数控制。
 - ALSA 音频输出设备，用于播放 TTS。
-- Waveshare ESP32-S3-Touch-LCD-3.5 或同类串口外设，用于显示状态、文本和后续交互信号。
+- Waveshare ESP32-S3 LCD 或同类串口外设，用于显示状态、文本和后续交互信号。
 
 其他硬件可通过配置适配；当前部署目标仍以 Jetson 机器人硬件为主。
 
@@ -67,7 +67,7 @@ Compose 中实际运行 6 个容器：
 - TTS：本地 MeloTTS；在线模式通过第三方 `edge-tts` 包调用 Microsoft Edge 在线语音服务。
 - 音频：sounddevice、ALSA `aplay`、ffmpeg、PyUSB、ReSpeaker USB tuning/DOA。
 - 容器：Docker Compose、Docker Hub ARM64 镜像、GitHub Actions Buildx 发布。
-- 固件：ESP-IDF 5.5.x、C/C++、LVGL、ST7796 LCD、FT6336 Touch、AXP2101 PMU。
+- 固件：ESP-IDF 5.5.x、C/C++、LVGL、ST7796 LCD、AXP2101 PMU。
 
 ## 快速启动
 
@@ -416,15 +416,14 @@ PY
 | --- | --- |
 | `firmware/display/README.md` | 显示屏固件单独构建/烧录说明。 |
 | `firmware/display/CMakeLists.txt` | ESP-IDF 项目定义。 |
-| `firmware/display/main/main.cpp` | 固件主程序：初始化 PMU/LCD/Touch/LVGL，读取串口 JSON 状态并更新动画。 |
+| `firmware/display/main/main.cpp` | 固件主程序：初始化 PMU/LCD/LVGL，读取串口 JSON 状态并更新动画。 |
 | `firmware/display/main/CMakeLists.txt` | 主组件构建定义。 |
 | `firmware/display/main/idf_component.yml` | ESP-IDF 组件依赖声明。 |
 | `firmware/display/sdkconfig.defaults` | ESP-IDF 默认配置。 |
 | `firmware/display/partitions.csv` | ESP32 分区表。 |
 | `firmware/display/dependencies.lock` | ESP-IDF 组件依赖锁定文件。 |
-| `firmware/display/components/esp_bsp/*` | 板级支持代码：I2C、AXP2101、电源、LCD、触摸、背光。 |
+| `firmware/display/components/esp_bsp/*` | 板级支持代码：I2C、AXP2101、电源、LCD、背光。 |
 | `firmware/display/components/esp_lcd_st7796/*` | ST7796 LCD 驱动组件。 |
-| `firmware/display/components/esp_lcd_touch_ft6336/*` | FT6336 触摸驱动组件。 |
 | `firmware/display/components/esp_lv_port/*` | LVGL 与 ESP LCD/FreeRTOS 的移植层。 |
 | `firmware/display/components/XPowersLib/*` | AXP2101 PMU 驱动库。 |
 
@@ -456,7 +455,7 @@ LLM：
 
 ## 显示屏固件
 
-固件位于 `firmware/display`，面向 Waveshare ESP32-S3-Touch-LCD-3.5。构建烧录：
+固件位于 `firmware/display`，面向 Waveshare ESP32-S3 LCD 状态屏。构建烧录：
 
 ```bash
 . /opt/esp-idf-v5.5.4/export.sh

@@ -4,24 +4,28 @@
 #include "bsp_axp2101.h"
 #include "bsp_display.h"
 #include "bsp_i2c.h"
-#include "bsp_touch.h"
+#include "esp_err.h"
 #include "esp_heap_caps.h"
 #include "esp_io_expander_tca9554.h"
 #include "esp_lcd_panel_ops.h"
 #include "esp_log.h"
+#include "logo_mark_data.h"
 #include "lv_port.h"
 
-#define EXAMPLE_DISPLAY_ROTATION LV_DISP_ROT_NONE
+#define EXAMPLE_DISPLAY_ROTATION LV_DISP_ROT_180
 #define EXAMPLE_LCD_H_RES 320
 #define EXAMPLE_LCD_V_RES 480
 #define LCD_BUFFER_PIXELS (EXAMPLE_LCD_H_RES * EXAMPLE_LCD_V_RES)
 #define LCD_TRANSFER_PIXELS (LCD_BUFFER_PIXELS / 10)
 #define LCD_TRANSFER_BYTES (LCD_TRANSFER_PIXELS * sizeof(uint16_t))
 
-#define BOOT_PATTERN_MS 200
+#define BOOT_PATTERN_MS 120
 #define BOOT_PATTERN_LINES 32
 #define DISPLAY_LINE_SIZE 512
 #define THINKING_TIMEOUT_MS 15000
+#define ANIMATION_FRAME_MS 33
+#define STARTUP_REFRESH_COUNT 8
+#define STARTUP_REFRESH_DELAY_MS 140
 
 static const char *TAG = "chat2me_display";
 
@@ -29,38 +33,13 @@ static esp_io_expander_handle_t expander_handle = NULL;
 static esp_lcd_panel_io_handle_t io_handle = NULL;
 static esp_lcd_panel_handle_t panel_handle = NULL;
 static lv_disp_t *lvgl_disp = NULL;
-static lv_indev_t *lvgl_touch_indev = NULL;
-
-#define WAVE_BAR_COUNT 7
-#define VOICE_WAVE_COUNT 16
 
 static lv_obj_t *root = NULL;
-static lv_obj_t *core_glow = NULL;
-static lv_obj_t *core = NULL;
-static lv_obj_t *arc_outer = NULL;
-static lv_obj_t *arc_signal = NULL;
-static lv_obj_t *voice_wave[VOICE_WAVE_COUNT] = {};
-static lv_obj_t *wave_bars[WAVE_BAR_COUNT] = {};
 
 static char current_state[24] = "idle";
 static uint32_t state_changed_ms = 0;
 
-static lv_color_t color_panel = lv_color_hex(0x081114);
-static lv_color_t color_dim = lv_color_hex(0x15313a);
-static lv_color_t color_idle = lv_color_hex(0x3da5ff);
-static lv_color_t color_listening = lv_color_hex(0x00d7c6);
-static lv_color_t color_thinking = lv_color_hex(0xffc857);
-static lv_color_t color_speaking = lv_color_hex(0x35ff8d);
-static lv_color_t color_error = lv_color_hex(0xff335f);
-
-static const int16_t voice_x[VOICE_WAVE_COUNT] = {
-    228, 223, 208, 185, 160, 135, 112, 97,
-    92, 97, 112, 135, 160, 185, 208, 223,
-};
-static const int16_t voice_y[VOICE_WAVE_COUNT] = {
-    214, 240, 262, 277, 282, 277, 262, 240,
-    214, 188, 166, 151, 146, 151, 166, 188,
-};
+static lv_color_t color_bg = lv_color_hex(0x020607);
 
 extern "C" void app_main(void);
 void lv_port_init(void);
@@ -105,25 +84,6 @@ static void io_expander_init(i2c_master_bus_handle_t bus_handle)
     vTaskDelay(pdMS_TO_TICKS(200));
 }
 
-static void touchpad_read(lv_indev_drv_t *indev_drv, lv_indev_data_t *data)
-{
-    static lv_coord_t last_x = 0;
-    static lv_coord_t last_y = 0;
-    touch_data_t touch_data;
-
-    bsp_touch_read();
-    if (bsp_touch_get_coordinates(&touch_data)) {
-        last_x = touch_data.coords[0].x;
-        last_y = touch_data.coords[0].y;
-        data->state = LV_INDEV_STATE_PR;
-    } else {
-        data->state = LV_INDEV_STATE_REL;
-    }
-
-    data->point.x = last_x;
-    data->point.y = last_y;
-}
-
 void lv_port_init(void)
 {
     lvgl_port_cfg_t port_cfg = {};
@@ -154,63 +114,143 @@ void lv_port_init(void)
         disp_cfg.vres = EXAMPLE_LCD_H_RES;
     }
     lvgl_disp = lvgl_port_add_disp(&disp_cfg);
-
-    static lv_indev_drv_t indev_drv;
-    lv_indev_drv_init(&indev_drv);
-    indev_drv.type = LV_INDEV_TYPE_POINTER;
-    indev_drv.read_cb = touchpad_read;
-    lvgl_touch_indev = lv_indev_drv_register(&indev_drv);
 }
 
-static lv_obj_t *make_panel(lv_obj_t *parent, int x, int y, int w, int h, lv_color_t bg, lv_opa_t bg_opa,
-                            lv_color_t border, lv_opa_t border_opa, int radius)
+static int clamp_int(int value, int min_value, int max_value)
 {
-    lv_obj_t *obj = lv_obj_create(parent);
-    lv_obj_remove_style_all(obj);
-    lv_obj_set_pos(obj, x, y);
-    lv_obj_set_size(obj, w, h);
-    lv_obj_set_style_radius(obj, radius, 0);
-    lv_obj_set_style_bg_opa(obj, bg_opa, 0);
-    lv_obj_set_style_bg_color(obj, bg, 0);
-    lv_obj_set_style_border_width(obj, border_opa == LV_OPA_TRANSP ? 0 : 1, 0);
-    lv_obj_set_style_border_color(obj, border, 0);
-    lv_obj_set_style_border_opa(obj, border_opa, 0);
-    return obj;
+    if (value < min_value) {
+        return min_value;
+    }
+    if (value > max_value) {
+        return max_value;
+    }
+    return value;
 }
 
-static lv_obj_t *make_arc(lv_obj_t *parent, int size, int y_offset, int start, int end, lv_color_t color,
-                          int width, lv_opa_t main_opa)
+static lv_obj_t *logo_img = NULL;
+static lv_img_dsc_t logo_dsc = {};
+static uint8_t *logo_pixels = NULL;
+static int logo_base_x = 0;
+static int logo_base_y = 0;
+static int logo_current_zoom = 256;
+static int logo_current_opa = LV_OPA_COVER;
+static uint32_t last_anim_ms = 0;
+
+static void fill_logo_pixels(void)
 {
-    lv_obj_t *arc = lv_arc_create(parent);
-    lv_obj_remove_style(arc, NULL, LV_PART_KNOB);
-    lv_obj_clear_flag(arc, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_set_size(arc, size, size);
-    lv_obj_align(arc, LV_ALIGN_CENTER, 0, y_offset);
-    lv_arc_set_bg_angles(arc, 0, 360);
-    lv_arc_set_angles(arc, start, end);
-    lv_obj_set_style_arc_width(arc, width, LV_PART_MAIN);
-    lv_obj_set_style_arc_color(arc, color_dim, LV_PART_MAIN);
-    lv_obj_set_style_arc_opa(arc, main_opa, LV_PART_MAIN);
-    lv_obj_set_style_arc_width(arc, width, LV_PART_INDICATOR);
-    lv_obj_set_style_arc_color(arc, color, LV_PART_INDICATOR);
-    lv_obj_set_style_arc_opa(arc, LV_OPA_COVER, LV_PART_INDICATOR);
-    lv_obj_set_style_arc_rounded(arc, true, LV_PART_INDICATOR);
-    return arc;
+    uint16_t white = lv_color_white().full;
+    for (int i = 0; i < LOGO_MARK_WIDTH * LOGO_MARK_HEIGHT; i++) {
+        logo_pixels[i * LV_IMG_PX_SIZE_ALPHA_BYTE + 0] = (uint8_t)(white & 0xff);
+        logo_pixels[i * LV_IMG_PX_SIZE_ALPHA_BYTE + 1] = (uint8_t)((white >> 8) & 0xff);
+        logo_pixels[i * LV_IMG_PX_SIZE_ALPHA_BYTE + 2] = kLogoMarkAlpha[i];
+    }
 }
 
-static void paint_arc_indicator(lv_obj_t *arc, lv_color_t color, lv_opa_t opa, int width)
+static int smooth_follow(int current, int target, int divisor)
 {
-    lv_obj_set_style_arc_color(arc, color, LV_PART_INDICATOR);
-    lv_obj_set_style_arc_opa(arc, opa, LV_PART_INDICATOR);
-    lv_obj_set_style_arc_width(arc, width, LV_PART_INDICATOR);
+    int delta = target - current;
+    if (delta == 0) {
+        return current;
+    }
+    int step = delta / divisor;
+    if (step == 0) {
+        step = delta > 0 ? 1 : -1;
+    }
+    return current + step;
 }
 
-static void paint_rect(lv_obj_t *obj, lv_color_t color, lv_opa_t opa)
+static int wave_value(uint32_t now, uint32_t period_ms, int phase_deg, int amplitude)
 {
-    lv_obj_set_style_bg_color(obj, color, 0);
-    lv_obj_set_style_bg_opa(obj, opa, 0);
-    lv_obj_set_style_border_color(obj, color, 0);
-    lv_obj_set_style_shadow_color(obj, color, 0);
+    int angle = (int)((now * 360 / period_ms + phase_deg) % 360);
+    return lv_trigo_sin((int16_t)angle) * amplitude / LV_TRIGO_SIN_MAX;
+}
+
+static int eased_cycle(uint32_t now, uint32_t period_ms, int phase_deg)
+{
+    int angle = (int)((now * 360 / period_ms + phase_deg) % 360);
+    return (lv_trigo_sin((int16_t)angle) + LV_TRIGO_SIN_MAX) * 255 / (2 * LV_TRIGO_SIN_MAX);
+}
+
+static void render_logo_animation(uint32_t now)
+{
+    if (!logo_img) {
+        return;
+    }
+
+    bool listening = strcmp(current_state, "listening") == 0;
+    bool thinking = strcmp(current_state, "thinking") == 0;
+    bool speaking = strcmp(current_state, "speaking") == 0;
+    bool error = strcmp(current_state, "error") == 0;
+    bool active = listening || thinking || speaking || error;
+
+    uint32_t elapsed = last_anim_ms == 0 ? 50 : now - last_anim_ms;
+    last_anim_ms = now;
+    int follow = elapsed > 120 ? 4 : 8;
+
+    int zoom = 256;
+    int opa = LV_OPA_COVER;
+
+    if (listening) {
+        zoom = 258 + wave_value(now, 3200, 20, 5);
+        opa = 248 + wave_value(now, 3000, 90, 5);
+    } else if (thinking) {
+        zoom = 257 + wave_value(now, 4600, 0, 8) + wave_value(now, 7200, 120, 3);
+        opa = 238 + wave_value(now, 5200, 60, 10);
+    } else if (speaking) {
+        int cycle = eased_cycle(now, 1650, 0);
+        int breathe = cycle < 128 ? cycle : 255 - cycle;
+        zoom = 257 + breathe * 16 / 128 + wave_value(now, 2600, 45, 3);
+        opa = 244 + breathe * 10 / 128;
+    } else if (error) {
+        int pulse = eased_cycle(now, 1050, 0);
+        int breathe = pulse < 128 ? pulse : 255 - pulse;
+        zoom = 256 + breathe * 12 / 128;
+        opa = 208 + breathe * 44 / 128;
+    }
+
+    logo_current_zoom = smooth_follow(logo_current_zoom, zoom, follow);
+    logo_current_opa = smooth_follow(logo_current_opa, opa, follow);
+
+    int current_zoom = active ? clamp_int(logo_current_zoom, 250, 278) : 256;
+    int current_opa = active ? clamp_int(logo_current_opa, 150, 255) : LV_OPA_COVER;
+
+    lv_obj_set_pos(logo_img, logo_base_x, logo_base_y);
+    lv_img_set_angle(logo_img, 0);
+    lv_img_set_zoom(logo_img, (uint16_t)current_zoom);
+    lv_obj_set_style_img_opa(logo_img, (lv_opa_t)current_opa, 0);
+    lv_obj_invalidate(logo_img);
+}
+
+static bool create_logo_mark(int logo_x, int logo_y)
+{
+    size_t bytes = LV_IMG_PX_SIZE_ALPHA_BYTE * LOGO_MARK_WIDTH * LOGO_MARK_HEIGHT;
+    logo_pixels = (uint8_t *)heap_caps_malloc(bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!logo_pixels) {
+        logo_pixels = (uint8_t *)heap_caps_malloc(bytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    }
+    if (!logo_pixels) {
+        ESP_LOGE(TAG, "logo allocation failed");
+        return false;
+    }
+
+    fill_logo_pixels();
+    logo_dsc.header.always_zero = 0;
+    logo_dsc.header.w = LOGO_MARK_WIDTH;
+    logo_dsc.header.h = LOGO_MARK_HEIGHT;
+    logo_dsc.header.cf = LV_IMG_CF_TRUE_COLOR_ALPHA;
+    logo_dsc.data_size = bytes;
+    logo_dsc.data = logo_pixels;
+
+    logo_img = lv_img_create(root);
+    lv_obj_clear_flag(logo_img, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
+    lv_img_set_src(logo_img, &logo_dsc);
+    lv_img_set_pivot(logo_img, LOGO_MARK_WIDTH / 2, LOGO_MARK_HEIGHT / 2);
+    lv_img_set_antialias(logo_img, true);
+    lv_img_set_angle(logo_img, 0);
+    lv_img_set_zoom(logo_img, 256);
+    lv_obj_set_style_img_opa(logo_img, LV_OPA_COVER, 0);
+    lv_obj_set_pos(logo_img, logo_x, logo_y);
+    return true;
 }
 
 static void build_ui(void)
@@ -218,48 +258,16 @@ static void build_ui(void)
     root = lv_scr_act();
     lv_obj_clear_flag(root, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_style_bg_opa(root, LV_OPA_COVER, 0);
-    lv_obj_set_style_bg_color(root, lv_color_black(), 0);
+    lv_obj_set_style_bg_color(root, color_bg, 0);
     lv_obj_set_style_bg_grad_dir(root, LV_GRAD_DIR_NONE, 0);
 
-    arc_outer = make_arc(root, 214, -26, 18, 342, color_idle, 3, LV_OPA_20);
-    arc_signal = make_arc(root, 178, -26, 0, 86, color_idle, 5, LV_OPA_0);
-
-    for (int i = 0; i < VOICE_WAVE_COUNT; i++) {
-        voice_wave[i] = make_panel(root, voice_x[i] - 2, voice_y[i] - 5, 4, 10,
-                                   color_idle, LV_OPA_30, color_idle, LV_OPA_0, 2);
-    }
-
-    core_glow = make_panel(root, 116, 170, 88, 88, color_panel, LV_OPA_70, color_idle, LV_OPA_20, 44);
-    lv_obj_set_style_shadow_width(core_glow, 18, 0);
-    lv_obj_set_style_shadow_color(core_glow, color_idle, 0);
-    lv_obj_set_style_shadow_opa(core_glow, LV_OPA_30, 0);
-
-    core = make_panel(root, 138, 192, 44, 44, color_idle, LV_OPA_COVER, color_idle, LV_OPA_20, 22);
-    lv_obj_set_style_shadow_width(core, 14, 0);
-    lv_obj_set_style_shadow_color(core, color_idle, 0);
-    lv_obj_set_style_shadow_opa(core, LV_OPA_40, 0);
-
-    for (int i = 0; i < WAVE_BAR_COUNT; i++) {
-        int x = 103 + i * 19;
-        wave_bars[i] = make_panel(root, x, 350, 8, 14, color_idle, LV_OPA_30, color_idle, LV_OPA_0, 4);
-    }
-}
-
-static lv_color_t state_color(const char *state)
-{
-    if (strcmp(state, "listening") == 0) {
-        return color_listening;
-    }
-    if (strcmp(state, "thinking") == 0) {
-        return color_thinking;
-    }
-    if (strcmp(state, "speaking") == 0) {
-        return color_speaking;
-    }
-    if (strcmp(state, "error") == 0) {
-        return color_error;
-    }
-    return color_idle;
+    int logo_x = (EXAMPLE_LCD_H_RES - LOGO_MARK_WIDTH) / 2;
+    int logo_y = (EXAMPLE_LCD_V_RES - LOGO_MARK_HEIGHT) / 2;
+    logo_base_x = logo_x;
+    logo_base_y = logo_y;
+    logo_current_zoom = 256;
+    logo_current_opa = LV_OPA_COVER;
+    create_logo_mark(logo_x, logo_y);
 }
 
 static void set_display_state_locked(const char *state)
@@ -271,128 +279,49 @@ static void set_display_state_locked(const char *state)
 
 static void apply_state_ui(void)
 {
-    lv_color_t c = state_color(current_state);
-    bool listening = strcmp(current_state, "listening") == 0;
-    bool thinking = strcmp(current_state, "thinking") == 0;
-    bool speaking = strcmp(current_state, "speaking") == 0;
-    bool error = strcmp(current_state, "error") == 0;
-
-    paint_rect(core, c, error ? LV_OPA_90 : LV_OPA_COVER);
-    lv_obj_set_style_border_color(core_glow, c, 0);
-    lv_obj_set_style_shadow_color(core_glow, c, 0);
-    lv_obj_set_style_shadow_color(core, c, 0);
-
-    paint_arc_indicator(arc_outer, c, error ? LV_OPA_80 : LV_OPA_60, error ? 4 : 3);
-    paint_arc_indicator(arc_signal, c, speaking ? LV_OPA_90 : (thinking ? LV_OPA_70 : LV_OPA_40), speaking ? 6 : 4);
-
-    for (int i = 0; i < VOICE_WAVE_COUNT; i++) {
-        paint_rect(voice_wave[i], c, speaking ? LV_OPA_70 : (listening ? LV_OPA_40 : (thinking ? LV_OPA_50 : LV_OPA_20)));
-    }
-    for (int i = 0; i < WAVE_BAR_COUNT; i++) {
-        paint_rect(wave_bars[i], c, strcmp(current_state, "idle") == 0 ? LV_OPA_20 : LV_OPA_60);
-    }
+    render_logo_animation(lv_tick_get());
 }
 
 static void animate_cb(lv_timer_t *timer)
 {
     (void)timer;
     uint32_t now = lv_tick_get();
-    int phase = (now / 90) % 64;
-    int slow_phase = (now / 140) % 64;
-    int wave = phase <= 32 ? phase : 64 - phase;
-    bool listening = strcmp(current_state, "listening") == 0;
     bool thinking = strcmp(current_state, "thinking") == 0;
-    bool speaking = strcmp(current_state, "speaking") == 0;
-    bool error = strcmp(current_state, "error") == 0;
 
     if (thinking && now - state_changed_ms > THINKING_TIMEOUT_MS) {
         set_display_state_locked("idle");
         apply_state_ui();
-        thinking = false;
     }
 
-    int rotation_speed = speaking ? 3 : (thinking ? 2 : 1);
-    lv_arc_set_rotation(arc_outer, (slow_phase * rotation_speed) % 360);
-    lv_arc_set_rotation(arc_signal, (phase * rotation_speed * 2) % 360);
-    lv_arc_set_angles(arc_signal, 0, speaking ? 118 : (thinking ? 78 : (listening ? 62 : 38)));
+    render_logo_animation(now);
+}
 
-    int glow_size = 86 + wave / 6;
-    int core_size = 42 + wave / 12;
-    if (speaking) {
-        glow_size = 88 + wave / 3;
-        core_size = 44 + wave / 8;
-    } else if (thinking) {
-        glow_size = 86 + wave / 4;
-        core_size = 42 + wave / 10;
-    } else if (error) {
-        glow_size = (phase % 18 < 9) ? 96 : 84;
-        core_size = (phase % 18 < 9) ? 48 : 40;
-    } else if (!listening) {
-        glow_size = 86;
-        core_size = 42;
+static void force_display_refresh_locked(void)
+{
+    if (!root || !lvgl_disp) {
+        return;
     }
+    lv_obj_invalidate(root);
+    lv_refr_now(lvgl_disp);
+}
 
-    lv_obj_set_size(core_glow, glow_size, glow_size);
-    lv_obj_set_style_radius(core_glow, glow_size / 2, 0);
-    lv_obj_align(core_glow, LV_ALIGN_CENTER, 0, -26);
-    lv_obj_set_size(core, core_size, core_size);
-    lv_obj_set_style_radius(core, core_size / 2, 0);
-    lv_obj_align(core, LV_ALIGN_CENTER, 0, -26);
-
-    for (int i = 0; i < VOICE_WAVE_COUNT; i++) {
-        int ripple = 1;
-        int thickness = 4;
-        lv_opa_t opa = LV_OPA_20;
-
-        if (speaking) {
-            ripple = ((phase * 2 + i * 5) % 18) - 4;
-            thickness = 4 + ((phase + i) % 3);
-            opa = LV_OPA_70;
-        } else if (listening) {
-            ripple = ((phase + i * 3) % 10) - 3;
-            thickness = 3;
-            opa = LV_OPA_40;
-        } else if (thinking) {
-            ripple = ((slow_phase + i * 2) % 12) - 4;
-            thickness = 3 + ((i + slow_phase / 4) % 2);
-            opa = LV_OPA_50;
-        } else if (error) {
-            ripple = (phase % 18 < 9) ? 10 : -2;
-            thickness = 5;
-            opa = LV_OPA_70;
-        } else {
-            thickness = 3;
-            opa = LV_OPA_20;
+static void startup_refresh_task(void *arg)
+{
+    (void)arg;
+    for (int i = 0; i < STARTUP_REFRESH_COUNT; i++) {
+        vTaskDelay(pdMS_TO_TICKS(STARTUP_REFRESH_DELAY_MS));
+        if (lvgl_port_lock(250)) {
+            esp_err_t err = esp_lcd_panel_disp_on_off(panel_handle, true);
+            if (err != ESP_OK) {
+                ESP_LOGW(TAG, "display on retry failed: %s", esp_err_to_name(err));
+            }
+            apply_state_ui();
+            animate_cb(NULL);
+            force_display_refresh_locked();
+            lvgl_port_unlock();
         }
-
-        int wave_shift = speaking ? phase / 5 : (thinking ? slow_phase / 8 : 0);
-        int base = (i + wave_shift) % VOICE_WAVE_COUNT;
-        int x = voice_x[base] - thickness / 2;
-        int y = voice_y[base] - 6 - ripple / 2;
-        int h = 10 + ripple;
-        if (h < 4) {
-            h = 4;
-        }
-        lv_obj_set_size(voice_wave[i], thickness, h);
-        lv_obj_set_style_radius(voice_wave[i], thickness / 2, 0);
-        lv_obj_set_pos(voice_wave[i], x, y);
-        lv_obj_set_style_bg_opa(voice_wave[i], opa, 0);
     }
-
-    for (int i = 0; i < WAVE_BAR_COUNT; i++) {
-        int h = 8 + (i % 2) * 2;
-        if (speaking) {
-            h = 12 + ((phase * (i + 2) + i * 7) % 28);
-        } else if (thinking) {
-            h = 10 + ((slow_phase + i * 5) % 18);
-        } else if (listening) {
-            h = 8 + ((phase + i * 3) % 14);
-        } else if (error) {
-            h = (phase % 18 < 9) ? 30 : 10;
-        }
-        lv_obj_set_height(wave_bars[i], h);
-        lv_obj_set_y(wave_bars[i], 357 - h / 2);
-    }
+    vTaskDelete(NULL);
 }
 
 static bool extract_json_value(const char *line, const char *key, char *out, size_t out_size)
@@ -424,7 +353,7 @@ static void handle_line(const char *line)
         return;
     }
 
-    if (lvgl_port_lock(pdMS_TO_TICKS(100))) {
+    if (lvgl_port_lock(100)) {
         set_display_state_locked(state);
         apply_state_ui();
         lvgl_port_unlock();
@@ -450,7 +379,6 @@ extern "C" void app_main(void)
     ESP_ERROR_CHECK(bsp_axp2101_init(i2c_bus_handle));
     io_expander_init(i2c_bus_handle);
     bsp_display_init(&io_handle, &panel_handle, LCD_TRANSFER_BYTES);
-    bsp_touch_init(i2c_bus_handle, EXAMPLE_LCD_H_RES, EXAMPLE_LCD_V_RES, 0);
     bsp_display_brightness_init();
     bsp_display_set_brightness(100);
     draw_boot_pattern();
@@ -462,11 +390,13 @@ extern "C" void app_main(void)
         build_ui();
         set_display_state_locked("idle");
         apply_state_ui();
-        lv_timer_create(animate_cb, 80, NULL);
-        lv_obj_invalidate(root);
+        lv_timer_create(animate_cb, ANIMATION_FRAME_MS, NULL);
+        animate_cb(NULL);
+        force_display_refresh_locked();
         lvgl_port_unlock();
         ESP_LOGI(TAG, "ui ready");
     }
 
+    xTaskCreate(startup_refresh_task, "display_startup_refresh", 4096, NULL, 5, NULL);
     xTaskCreate(uart_task, "uart_status", 4096, NULL, 8, NULL);
 }
