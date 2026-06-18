@@ -1122,10 +1122,9 @@ def listen_command(
 
     recognizer.input_finished(stream)
     final_text = (decode_ready_asr(recognizer, stream) or last_text).strip()
-    control_activity_available = voice_activity_probe is not None and (vad_active_chunks > 0 or speech_detected_chunks > 0)
-    if final_text and voice_activity_probe is not None and not control_activity_available and rms_active_chunks <= 1:
+    if final_text and voice_activity_probe is not None and speech_detected_chunks == 0:
         log(
-            "asr rejected without voice evidence: "
+            "asr rejected without speech detection: "
             f"text='{final_text}' rms_active_chunks={rms_active_chunks} "
             f"vad_active_chunks={vad_active_chunks} speech_detected_chunks={speech_detected_chunks}",
             level="info",
