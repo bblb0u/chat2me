@@ -147,6 +147,26 @@ def build_match_prefix_pattern() -> re.Pattern[str]:
 
 
 MATCH_PREFIX_PATTERN = build_match_prefix_pattern()
+DEFAULT_INVALID_INPUT_UTTERANCES = (
+    "嗯",
+    "嗯嗯",
+    "嗯嗯嗯",
+    "恩",
+    "恩恩",
+    "啊",
+    "啊啊",
+    "呃",
+    "呃呃",
+    "额",
+    "额额",
+    "嗯哼",
+    "en",
+    "enen",
+    "em",
+    "emm",
+    "um",
+    "uh",
+)
 
 
 def load_yaml(path: Path, default: dict[str, Any]) -> dict[str, Any]:
@@ -206,6 +226,43 @@ def normalize_for_match(text: str) -> str:
     return normalized
 
 
+def invalid_input_utterances() -> frozenset[str]:
+    router = profile().get("intent_router", {})
+    if not isinstance(router, dict):
+        router = {}
+    configured = router.get("invalid_input_utterances", [])
+    if not isinstance(configured, list):
+        configured = []
+
+    intents = router.get("intents", {})
+    invalid_input = intents.get("invalid_input", {}) if isinstance(intents, dict) else {}
+    examples = invalid_input.get("examples", []) if isinstance(invalid_input, dict) else []
+    if not isinstance(examples, list):
+        examples = []
+
+    return frozenset(
+        normalized
+        for normalized in (
+            normalize_for_match(str(item))
+            for item in (*DEFAULT_INVALID_INPUT_UTTERANCES, *configured, *examples)
+        )
+        if normalized
+    )
+
+
+def is_invalid_input(message: str) -> bool:
+    normalized = normalize_for_match(message)
+    if not normalized:
+        return True
+    if normalized in invalid_input_utterances():
+        return True
+
+    chinese_fillers = set("嗯恩啊呃额喔哦噢哼唔")
+    if len(normalized) <= 4 and all(char in chinese_fillers for char in normalized):
+        return True
+    return bool(len(normalized) <= 8 and re.fullmatch(r"(en|em|um|uh|ah|a)+", normalized))
+
+
 def match_fixed_qa(message: str) -> str | None:
     normalized = normalize_for_match(message)
     for _, item in fixed_qa_items():
@@ -254,9 +311,10 @@ def build_intent_prompt() -> str:
         "你是 Chat2Me 的本地意图分类器，只做意图分类，不回答用户问题。\n"
         "必须只输出一个 JSON 对象，不要输出解释、Markdown 或额外文本。\n"
         "JSON 字段固定为：intent、fixed_qa_id、confidence。\n"
-        "intent 只能是 blocked、fixed_qa、direction、session_end、chat。\n"
+        "intent 只能是 blocked、fixed_qa、direction、session_end、invalid_input、chat。\n"
         "fixed_qa_id 只能来自 allowed_fixed_qa_ids；非 fixed_qa 时必须为 null。\n"
         "confidence 是 0 到 1 的数字；不确定时返回 intent=chat。\n"
+        "如果用户输入只是语气词、应声、口头填充、噪声转写或没有明确问题/指令，必须返回 invalid_input。\n"
         "不要编造 fixed_qa_id；不能确定命中固定问答时返回 chat。\n"
         f"allowed_fixed_qa_ids={allowed_fixed_ids_json}\n"
         f"意图目录={catalog}"
@@ -286,7 +344,7 @@ def parse_intent_result(content: str) -> dict[str, Any] | None:
         return None
 
     intent = str(data.get("intent") or "chat").strip().lower()
-    if intent not in {"blocked", "fixed_qa", "direction", "session_end", "chat"}:
+    if intent not in {"blocked", "fixed_qa", "direction", "session_end", "invalid_input", "chat"}:
         return None
 
     fixed_qa_id_value = data.get("fixed_qa_id")
@@ -410,6 +468,12 @@ async def intent_chat_response(message: str, started_at: float) -> ChatResponse 
     intent = str(result.get("intent") or "chat")
     if intent == "chat":
         return None
+    if intent == "invalid_input":
+        return ChatResponse(
+            answer="",
+            route="invalid_input",
+            latency_ms=int((time.perf_counter() - started_at) * 1000),
+        )
     if intent == "blocked":
         return ChatResponse(
             answer=blocked_response(),
@@ -485,6 +549,13 @@ async def direction() -> DirectionResponse:
 async def chat(request: ChatRequest) -> ChatResponse:
     started_at = time.perf_counter()
     message = request.message.strip()
+
+    if is_invalid_input(message):
+        return ChatResponse(
+            answer="",
+            route="invalid_input",
+            latency_ms=int((time.perf_counter() - started_at) * 1000),
+        )
 
     if contains_blocked_keyword(message):
         return ChatResponse(

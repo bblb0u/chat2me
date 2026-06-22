@@ -24,8 +24,25 @@ LOCAL_TTS_ENGINE = "melotts"
 LOCAL_TTS_MODEL = "MeloTTS-Chinese"
 CONFIGURED_TTS_ENGINE = voice.VOICE_TTS_ENGINE
 CONFIGURED_TTS_MODEL = voice.VOICE_TTS_MODEL
-TTS_REACHABILITY_INTERVAL_SECONDS = 5.0
-TTS_REACHABILITY_TIMEOUT_SECONDS = 5.0
+
+
+def env_float_default(key: str, default: float) -> float:
+    value = os.getenv(key)
+    if value is None or not value.strip():
+        return default
+    try:
+        return float(value.strip())
+    except ValueError:
+        raise RuntimeError(f"{key} must be a number in runtime.env") from None
+
+
+TTS_REACHABILITY_INTERVAL_SECONDS = env_float_default("TTS_REACHABILITY_INTERVAL_SECONDS", 5.0)
+TTS_REACHABILITY_TIMEOUT_SECONDS = env_float_default("TTS_REACHABILITY_TIMEOUT_SECONDS", 3.0)
+TTS_ONLINE_SYNTHESIS_TIMEOUT_SECONDS = env_float_default("TTS_ONLINE_SYNTHESIS_TIMEOUT_SECONDS", 8.0)
+TTS_ONLINE_FAILURE_COOLDOWN_SECONDS = env_float_default("TTS_ONLINE_FAILURE_COOLDOWN_SECONDS", 30.0)
+TTS_ONLINE_RECENT_SUCCESS_GRACE_SECONDS = env_float_default("TTS_ONLINE_RECENT_SUCCESS_GRACE_SECONDS", 30.0)
+TTS_LOCAL_SYNTHESIS_TIMEOUT_SECONDS = env_float_default("TTS_LOCAL_SYNTHESIS_TIMEOUT_SECONDS", 20.0)
+TTS_LOCAL_LOCK_TIMEOUT_SECONDS = env_float_default("TTS_LOCAL_LOCK_TIMEOUT_SECONDS", 5.0)
 
 
 @dataclass(frozen=True)
@@ -44,6 +61,7 @@ class HealthResponse(BaseModel):
     configured_engine: str
     active_online: bool
     online_status: str
+    online_cooldown_remaining_seconds: float = 0.0
     local_engine: str
     local_model: str
     sample_rate: int
@@ -55,13 +73,18 @@ class ReachabilityResponse(BaseModel):
     model: str | None
     status: str
     checked_at: float | None = None
+    cooldown_remaining_seconds: float = 0.0
 
 
 ONLINE_REACHABILITY = Reachability(online=False, status="not_checked")
+ONLINE_DISABLED_UNTIL = 0.0
+ONLINE_LAST_SUCCESS_AT = 0.0
 ONLINE_REACHABILITY_TASK: asyncio.Task[None] | None = None
 LOCAL_VOICE: voice.TextToSpeech | None = None
 ONLINE_VOICE: voice.TextToSpeech | None = None
-TTS_INFERENCE_LOCK = threading.Lock()
+ONLINE_STATE_LOCK = threading.Lock()
+ONLINE_TTS_LOCK = threading.Lock()
+LOCAL_TTS_LOCK = threading.Lock()
 
 
 def online_enabled() -> bool:
@@ -83,6 +106,60 @@ def validate_tts_selection() -> None:
         raise RuntimeError("online TTS only supports VOICE_TTS_MODEL=edge-tts")
     if local_model() != "MeloTTS-Chinese":
         raise RuntimeError("local TTS only supports MeloTTS-Chinese")
+
+
+def online_state_snapshot() -> tuple[Reachability, float]:
+    with ONLINE_STATE_LOCK:
+        cooldown_remaining = max(0.0, ONLINE_DISABLED_UNTIL - time.monotonic())
+        return ONLINE_REACHABILITY, cooldown_remaining
+
+
+def publish_online_reachability(result: Reachability) -> None:
+    global ONLINE_REACHABILITY, ONLINE_DISABLED_UNTIL, ONLINE_LAST_SUCCESS_AT
+    with ONLINE_STATE_LOCK:
+        now = time.monotonic()
+        if result.online and ONLINE_DISABLED_UNTIL > time.monotonic():
+            return
+        if not result.online and now - ONLINE_LAST_SUCCESS_AT < max(0.0, TTS_ONLINE_RECENT_SUCCESS_GRACE_SECONDS):
+            return
+        ONLINE_REACHABILITY = result
+        if result.online:
+            ONLINE_DISABLED_UNTIL = 0.0
+            ONLINE_LAST_SUCCESS_AT = now
+
+
+def mark_online_success() -> None:
+    publish_online_reachability(Reachability(online=True, status="ok", checked_at=time.time()))
+
+
+def disable_online_temporarily(status: str, exc: Exception | None = None) -> None:
+    global ONLINE_REACHABILITY, ONLINE_DISABLED_UNTIL
+    cooldown = max(0.0, TTS_ONLINE_FAILURE_COOLDOWN_SECONDS)
+    with ONLINE_STATE_LOCK:
+        ONLINE_DISABLED_UNTIL = time.monotonic() + cooldown
+        ONLINE_REACHABILITY = Reachability(online=False, status=status, checked_at=time.time())
+    detail = f": {exc}" if exc is not None else ""
+    log(f"online TTS disabled for {cooldown:.1f}s after {status}{detail}", level="warning")
+
+
+def online_available() -> bool:
+    if not online_enabled() or ONLINE_VOICE is None:
+        return False
+    reachability, cooldown_remaining = online_state_snapshot()
+    return reachability.online and cooldown_remaining <= 0.0
+
+
+def online_skip_reason() -> str:
+    if not online_enabled():
+        return "online_engine_disabled"
+    if ONLINE_VOICE is None:
+        return "online_voice_not_ready"
+    reachability, cooldown_remaining = online_state_snapshot()
+    if cooldown_remaining > 0.0:
+        return "online_cooling_down"
+    if not reachability.online:
+        return reachability.status
+    return "online_not_selected"
 
 
 def with_tts_env(engine: str, model: str) -> None:
@@ -128,6 +205,46 @@ def synthesize_wav(tts_voice: voice.TextToSpeech, text: str) -> bytes:
     return pcm_to_wav(pcm, int(tts_voice.config.sample_rate))
 
 
+def synthesize_wav_locked(
+    tts_voice: voice.TextToSpeech,
+    text: str,
+    lock: threading.Lock,
+    name: str,
+    lock_timeout_seconds: float,
+) -> bytes:
+    if lock_timeout_seconds <= 0:
+        acquired = lock.acquire(blocking=False)
+    else:
+        acquired = lock.acquire(timeout=lock_timeout_seconds)
+    if not acquired:
+        raise RuntimeError(f"{name} TTS is busy")
+    try:
+        return synthesize_wav(tts_voice, text)
+    finally:
+        lock.release()
+
+
+async def run_blocking_synthesis(
+    tts_voice: voice.TextToSpeech,
+    text: str,
+    lock: threading.Lock,
+    name: str,
+    lock_timeout_seconds: float,
+    timeout_seconds: float,
+) -> bytes:
+    loop = asyncio.get_running_loop()
+    future = loop.run_in_executor(
+        None,
+        synthesize_wav_locked,
+        tts_voice,
+        text,
+        lock,
+        name,
+        lock_timeout_seconds,
+    )
+    return await asyncio.wait_for(future, timeout=max(0.1, timeout_seconds))
+
+
 async def probe_online() -> Reachability:
     if not online_enabled():
         return Reachability(online=False, status="online_engine_disabled", checked_at=time.time())
@@ -146,20 +263,23 @@ async def probe_online() -> Reachability:
 
 
 async def reachability_loop() -> None:
-    global ONLINE_REACHABILITY
     interval = max(0.5, TTS_REACHABILITY_INTERVAL_SECONDS)
     while True:
-        ONLINE_REACHABILITY = await probe_online()
+        _, cooldown_remaining = online_state_snapshot()
+        if cooldown_remaining > 0:
+            await asyncio.sleep(min(interval, cooldown_remaining))
+            continue
+        publish_online_reachability(await probe_online())
         await asyncio.sleep(interval)
 
 
 async def startup() -> None:
-    global LOCAL_VOICE, ONLINE_VOICE, ONLINE_REACHABILITY, ONLINE_REACHABILITY_TASK
+    global LOCAL_VOICE, ONLINE_VOICE, ONLINE_REACHABILITY_TASK
     validate_tts_selection()
     LOCAL_VOICE = create_local_voice()
     if online_enabled():
         ONLINE_VOICE = create_online_voice()
-        ONLINE_REACHABILITY = await probe_online()
+        publish_online_reachability(await probe_online())
         ONLINE_REACHABILITY_TASK = asyncio.create_task(reachability_loop())
 
 
@@ -187,55 +307,85 @@ app = FastAPI(title="Chat2Me TTS", version="0.1.0", lifespan=lifespan)
 
 @app.get("/health", response_model=HealthResponse)
 async def health() -> HealthResponse:
-    voice = ONLINE_VOICE if online_enabled() and ONLINE_REACHABILITY.online and ONLINE_VOICE is not None else LOCAL_VOICE
+    reachability, cooldown_remaining = online_state_snapshot()
+    active_online = online_enabled() and reachability.online and cooldown_remaining <= 0.0
+    active_voice = ONLINE_VOICE if active_online and ONLINE_VOICE is not None else LOCAL_VOICE
     return HealthResponse(
         ok=LOCAL_VOICE is not None,
         configured_engine=CONFIGURED_TTS_ENGINE,
-        active_online=online_enabled() and ONLINE_REACHABILITY.online,
-        online_status=ONLINE_REACHABILITY.status,
+        active_online=active_online,
+        online_status=reachability.status,
+        online_cooldown_remaining_seconds=round(cooldown_remaining, 1),
         local_engine=local_engine(),
         local_model=local_model(),
-        sample_rate=int(getattr(getattr(voice, "config", None), "sample_rate", 0) or 0),
+        sample_rate=int(getattr(getattr(active_voice, "config", None), "sample_rate", 0) or 0),
     )
 
 
 @app.get("/tts/reachability", response_model=ReachabilityResponse)
 async def reachability() -> ReachabilityResponse:
+    reachability, cooldown_remaining = online_state_snapshot()
     return ReachabilityResponse(
-        online=ONLINE_REACHABILITY.online,
+        online=reachability.online and cooldown_remaining <= 0.0,
         provider="online-tts" if online_enabled() else "local",
         model=CONFIGURED_TTS_MODEL if online_enabled() else None,
-        status=ONLINE_REACHABILITY.status if online_enabled() else "online_engine_disabled",
-        checked_at=ONLINE_REACHABILITY.checked_at,
+        status=reachability.status if online_enabled() else "online_engine_disabled",
+        checked_at=reachability.checked_at,
+        cooldown_remaining_seconds=round(cooldown_remaining, 1),
     )
 
 
 @app.post("/tts/speak")
 async def speak(request: SpeakRequest) -> Response:
-    use_online = online_enabled() and ONLINE_REACHABILITY.online
+    fallback_reason = ""
+    if online_available() and ONLINE_VOICE is not None:
+        try:
+            wav = await run_blocking_synthesis(
+                ONLINE_VOICE,
+                request.text,
+                ONLINE_TTS_LOCK,
+                "online",
+                0.0,
+                TTS_ONLINE_SYNTHESIS_TIMEOUT_SECONDS,
+            )
+            mark_online_success()
+            reachability, _ = online_state_snapshot()
+            return Response(
+                content=wav,
+                media_type="audio/wav",
+                headers={
+                    "X-Chat2Me-TTS-Route": "online",
+                    "X-Chat2Me-TTS-Engine": "online",
+                    "X-Chat2Me-TTS-Model": CONFIGURED_TTS_MODEL,
+                    "X-Chat2Me-Online-Status": reachability.status,
+                },
+            )
+        except asyncio.TimeoutError as exc:
+            fallback_reason = "online_timeout"
+            disable_online_temporarily(fallback_reason, exc)
+        except Exception as exc:
+            fallback_reason = f"online_failed:{exc.__class__.__name__}"
+            disable_online_temporarily(fallback_reason, exc)
+    else:
+        fallback_reason = online_skip_reason()
 
-    with TTS_INFERENCE_LOCK:
-        if use_online and ONLINE_VOICE is not None:
-            try:
-                with_tts_env("online", CONFIGURED_TTS_MODEL)
-                wav = synthesize_wav(ONLINE_VOICE, request.text)
-                return Response(
-                    content=wav,
-                    media_type="audio/wav",
-                    headers={
-                        "X-Chat2Me-TTS-Route": "online",
-                        "X-Chat2Me-TTS-Engine": "online",
-                        "X-Chat2Me-TTS-Model": CONFIGURED_TTS_MODEL,
-                        "X-Chat2Me-Online-Status": ONLINE_REACHABILITY.status,
-                    },
-                )
-            except Exception as exc:
-                log(f"online TTS failed; falling back to local: {exc}", level="warning")
+    if LOCAL_VOICE is None:
+        raise HTTPException(status_code=503, detail="local TTS is not ready")
+    try:
+        wav = await run_blocking_synthesis(
+            LOCAL_VOICE,
+            request.text,
+            LOCAL_TTS_LOCK,
+            "local",
+            TTS_LOCAL_LOCK_TIMEOUT_SECONDS,
+            TTS_LOCAL_SYNTHESIS_TIMEOUT_SECONDS,
+        )
+    except asyncio.TimeoutError as exc:
+        raise HTTPException(status_code=504, detail="local TTS synthesis timed out") from exc
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"local TTS synthesis failed: {exc}") from exc
 
-        if LOCAL_VOICE is None:
-            raise HTTPException(status_code=503, detail="local TTS is not ready")
-        with_tts_env(local_engine(), local_model())
-        wav = synthesize_wav(LOCAL_VOICE, request.text)
+    reachability, _ = online_state_snapshot()
     return Response(
         content=wav,
         media_type="audio/wav",
@@ -244,7 +394,8 @@ async def speak(request: SpeakRequest) -> Response:
             "X-Chat2Me-TTS-Engine": local_engine(),
             "X-Chat2Me-TTS-Model": local_model(),
             "X-Chat2Me-TTS-Fallback": "1" if online_enabled() else "0",
-            "X-Chat2Me-Online-Status": ONLINE_REACHABILITY.status,
+            "X-Chat2Me-TTS-Fallback-Reason": fallback_reason,
+            "X-Chat2Me-Online-Status": reachability.status,
         },
     )
 

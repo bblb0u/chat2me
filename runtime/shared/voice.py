@@ -39,6 +39,16 @@ def env_bool_default(key: str, default: bool) -> bool:
     raise RuntimeError(f"{key} must be a boolean in runtime.env")
 
 
+def env_float_default(key: str, default: float) -> float:
+    value = os.getenv(key)
+    if value is None or not value.strip():
+        return default
+    try:
+        return float(value.strip())
+    except ValueError:
+        raise RuntimeError(f"{key} must be a number in runtime.env") from None
+
+
 def is_default_audio_selector(value: str) -> bool:
     return value.strip().lower() in {"", "auto", "default"}
 
@@ -127,6 +137,8 @@ TTS_WARMUP_TEXTS = tuple(
     for text in os.getenv("TTS_WARMUP_TEXTS", "").split("|")
     if text.strip()
 )
+TTS_SERVICE_CONNECT_TIMEOUT_SECONDS = env_float_default("TTS_SERVICE_CONNECT_TIMEOUT_SECONDS", 3.0)
+TTS_SERVICE_READ_TIMEOUT_SECONDS = env_float_default("TTS_SERVICE_READ_TIMEOUT_SECONDS", 35.0)
 TTS_MODEL_DIR = MODELS_DIR / VOICE_TTS_ENGINE / VOICE_TTS_MODEL
 VOICE_TTS_DEVICE = os.getenv("VOICE_TTS_DEVICE", "auto").strip().lower()
 MELOTTS_CONFIG_FILE = Path(os.getenv("MELOTTS_CONFIG_FILE", str(TTS_MODEL_DIR / "config.json")))
@@ -736,8 +748,12 @@ def synthesize_remote_wav(text: str) -> bytes:
     import httpx
 
     payload = {"text": text}
-    read_timeout = max(float(EDGE_TTS_RECEIVE_TIMEOUT_SECONDS), TTS_PLAYER_TIMEOUT_SECONDS) + 10
-    timeout = httpx.Timeout(connect=5.0, read=read_timeout, write=15.0, pool=5.0)
+    timeout = httpx.Timeout(
+        connect=max(0.1, TTS_SERVICE_CONNECT_TIMEOUT_SECONDS),
+        read=max(1.0, TTS_SERVICE_READ_TIMEOUT_SECONDS),
+        write=15.0,
+        pool=5.0,
+    )
     with httpx.Client(timeout=timeout) as client:
         response = client.post(TTS_SERVICE_URL, json=payload)
         response.raise_for_status()
@@ -1182,6 +1198,11 @@ def handle_conversation_turn(
 
     answer = str(core_result.get("answer", "")).strip()
     route = str(core_result.get("route", "")).strip()
+    if route == "invalid_input":
+        log(f"invalid input discarded: {command}")
+        display.set_state("idle")
+        return False
+
     log(f"answer: {answer}")
     speech_answer = spoken_text(answer)
     if speech_answer != answer:

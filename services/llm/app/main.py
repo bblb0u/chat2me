@@ -104,6 +104,7 @@ LLM_REACHABILITY_INTERVAL_SECONDS = 5.0
 LLM_REACHABILITY_TIMEOUT_SECONDS = 1.5
 OLLAMA_NUM_CTX = env_int("OLLAMA_NUM_CTX")
 OLLAMA_NUM_THREAD = env_int("OLLAMA_NUM_THREAD")
+OLLAMA_KEEP_ALIVE = env_value("OLLAMA_KEEP_ALIVE", allow_empty=True, default="30m")
 INTENT_MODEL = env_value("INTENT_MODEL", allow_empty=True, default="")
 INTENT_MAX_TOKENS = env_int("INTENT_MAX_TOKENS", default="48")
 INTENT_NUM_CTX = env_int("INTENT_NUM_CTX", default="2048")
@@ -344,6 +345,8 @@ async def call_ollama_with_options(
             "num_thread": OLLAMA_NUM_THREAD,
         },
     }
+    if OLLAMA_KEEP_ALIVE:
+        payload["keep_alive"] = OLLAMA_KEEP_ALIVE
     timeout = httpx.Timeout(connect=LLM_CONNECT_TIMEOUT_SECONDS, read=timeout_seconds, write=10.0, pool=5.0)
     async with httpx.AsyncClient(timeout=timeout) as client:
         response = await client.post(f"{OLLAMA_BASE_URL}/api/chat", json=payload)
