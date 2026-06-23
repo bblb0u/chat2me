@@ -196,6 +196,32 @@ def blocked_response() -> str:
     return str(safety().get("blocked_response", "这个问题暂时不能回答。"))
 
 
+LLM_LEAK_PATTERNS = (
+    "内部思考过程",
+    "只输出给用户听",
+    "输出规则",
+    "系统提示",
+    "system prompt",
+    "我需要用",
+    "我需要先",
+    "控制在40个中文字符",
+    "不要输出",
+    "<think",
+    "</think>",
+)
+
+
+def contains_llm_leak(text: str) -> bool:
+    normalized = text.strip().lower()
+    if not normalized:
+        return False
+    return any(pattern.lower() in normalized for pattern in LLM_LEAK_PATTERNS)
+
+
+def leaked_output_response() -> str:
+    return "我可以陪你问答交流，也能介绍江淮中心和机器人相关内容。"
+
+
 def fixed_qa_id(item: dict[str, Any], index: int) -> str:
     value = str(item.get("id") or "").strip()
     return value or f"fixed_qa_{index}"
@@ -592,6 +618,9 @@ async def chat(request: ChatRequest) -> ChatResponse:
     if contains_blocked_keyword(result.answer):
         answer = blocked_response()
         route = "blocked_output"
+    elif contains_llm_leak(result.answer):
+        answer = leaked_output_response()
+        route = "filtered_output"
     else:
         answer = result.answer
         route = result.route
