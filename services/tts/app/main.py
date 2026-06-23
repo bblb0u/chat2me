@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import math
 import os
 import threading
 import time
 import wave
+import numpy as np
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from io import BytesIO
@@ -36,6 +38,18 @@ def env_float_default(key: str, default: float) -> float:
         raise RuntimeError(f"{key} must be a number in runtime.env") from None
 
 
+def env_bool_default(key: str, default: bool) -> bool:
+    value = os.getenv(key)
+    if value is None or not value.strip():
+        return default
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise RuntimeError(f"{key} must be a boolean in runtime.env")
+
+
 TTS_REACHABILITY_INTERVAL_SECONDS = env_float_default("TTS_REACHABILITY_INTERVAL_SECONDS", 5.0)
 TTS_REACHABILITY_TIMEOUT_SECONDS = env_float_default("TTS_REACHABILITY_TIMEOUT_SECONDS", 3.0)
 TTS_ONLINE_SYNTHESIS_TIMEOUT_SECONDS = env_float_default("TTS_ONLINE_SYNTHESIS_TIMEOUT_SECONDS", 8.0)
@@ -43,6 +57,16 @@ TTS_ONLINE_FAILURE_COOLDOWN_SECONDS = env_float_default("TTS_ONLINE_FAILURE_COOL
 TTS_ONLINE_RECENT_SUCCESS_GRACE_SECONDS = env_float_default("TTS_ONLINE_RECENT_SUCCESS_GRACE_SECONDS", 30.0)
 TTS_LOCAL_SYNTHESIS_TIMEOUT_SECONDS = env_float_default("TTS_LOCAL_SYNTHESIS_TIMEOUT_SECONDS", 20.0)
 TTS_LOCAL_LOCK_TIMEOUT_SECONDS = env_float_default("TTS_LOCAL_LOCK_TIMEOUT_SECONDS", 5.0)
+TTS_NORMALIZE_ENABLED = env_bool_default("TTS_NORMALIZE_ENABLED", True)
+TTS_TARGET_RMS_DBFS = env_float_default("TTS_TARGET_RMS_DBFS", -22.0)
+TTS_PEAK_LIMIT_DBFS = env_float_default("TTS_PEAK_LIMIT_DBFS", -2.0)
+TTS_NORMALIZE_ACTIVE_FLOOR_DBFS = env_float_default("TTS_NORMALIZE_ACTIVE_FLOOR_DBFS", -45.0)
+TTS_NORMALIZE_MIN_GAIN = env_float_default("TTS_NORMALIZE_MIN_GAIN", 0.25)
+TTS_NORMALIZE_MAX_GAIN = env_float_default("TTS_NORMALIZE_MAX_GAIN", 6.0)
+if TTS_NORMALIZE_MIN_GAIN <= 0 or TTS_NORMALIZE_MAX_GAIN <= 0:
+    raise RuntimeError("TTS_NORMALIZE_MIN_GAIN and TTS_NORMALIZE_MAX_GAIN must be greater than zero")
+if TTS_NORMALIZE_MIN_GAIN > TTS_NORMALIZE_MAX_GAIN:
+    raise RuntimeError("TTS_NORMALIZE_MIN_GAIN must be less than or equal to TTS_NORMALIZE_MAX_GAIN")
 
 
 @dataclass(frozen=True)
@@ -200,8 +224,42 @@ def pcm_to_wav(pcm: bytes, sample_rate: int) -> bytes:
     return buffer.getvalue()
 
 
+def dbfs_to_amplitude(dbfs: float) -> float:
+    return 10 ** (dbfs / 20.0)
+
+
+def normalize_pcm_loudness(pcm: bytes) -> bytes:
+    if not TTS_NORMALIZE_ENABLED or not pcm:
+        return pcm
+    samples = np.frombuffer(pcm, dtype=np.int16).astype(np.float32)
+    normalized = samples / 32768.0
+    floor = dbfs_to_amplitude(TTS_NORMALIZE_ACTIVE_FLOOR_DBFS)
+    active = normalized[np.abs(normalized) >= floor]
+    if active.size == 0:
+        active = normalized
+    rms = math.sqrt(float(np.mean(active * active))) if active.size else 0.0
+    if rms <= 0:
+        return pcm
+
+    target_rms = dbfs_to_amplitude(TTS_TARGET_RMS_DBFS)
+    gain = target_rms / rms
+    gain = min(TTS_NORMALIZE_MAX_GAIN, max(TTS_NORMALIZE_MIN_GAIN, gain))
+
+    peak = float(np.max(np.abs(normalized))) if normalized.size else 0.0
+    peak_limit = dbfs_to_amplitude(TTS_PEAK_LIMIT_DBFS)
+    if peak > 0 and peak * gain > peak_limit:
+        gain = peak_limit / peak
+    if abs(gain - 1.0) < 0.001:
+        return pcm
+
+    samples *= gain
+    np.clip(samples, -32768, 32767, out=samples)
+    return samples.astype(np.int16).tobytes()
+
+
 def synthesize_wav(tts_voice: voice.TextToSpeech, text: str) -> bytes:
     pcm = b"".join(chunk for chunk in tts_voice.synthesize_pcm(text) if chunk)
+    pcm = normalize_pcm_loudness(pcm)
     return pcm_to_wav(pcm, int(tts_voice.config.sample_rate))
 
 
