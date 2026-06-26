@@ -41,13 +41,18 @@ RUN curl -fsSL https://micro.mamba.pm/api/micromamba/linux-aarch64/latest -o /tm
     && micromamba clean -a -y \
     && rm -f /tmp/micromamba.tar.bz2
 
+COPY runtime/tools/preload.sh /opt/preload.sh
+RUN chmod +x /opt/preload.sh \
+    && DEFAULT_MODEL_SET=asr,homophone /opt/preload.sh \
+    && rm -f /opt/preload.sh
+
 COPY config /defaults/config
-COPY runtime/entrypoints/audio.sh /entrypoint.sh
+COPY runtime/entrypoints/audio.sh /audio.sh
 COPY runtime/shared/common.py ./app/common.py
 COPY runtime/shared/voice.py ./app/voice.py
 COPY services/asr/app/main.py ./app/main.py
 COPY runtime/tools/homophone.py ./runtime/tools/homophone.py
-RUN chmod +x /entrypoint.sh
+RUN chmod +x /audio.sh
 
-ENTRYPOINT ["/entrypoint.sh"]
+ENTRYPOINT ["/audio.sh"]
 CMD ["python3", "-m", "app.main"]

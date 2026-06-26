@@ -19,10 +19,10 @@ RUN pip install --no-cache-dir \
       -r requirements.txt
 
 COPY config /defaults/config
-COPY runtime/entrypoints/config.sh /entrypoint.sh
+COPY runtime/entrypoints/config.sh /config.sh
 COPY runtime/shared/common.py ./app/common.py
 COPY services/core/app ./app
-RUN chmod +x /entrypoint.sh
+RUN chmod +x /config.sh
 
-ENTRYPOINT ["/entrypoint.sh"]
+ENTRYPOINT ["/config.sh"]
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080", "--no-access-log", "--log-level", "warning"]

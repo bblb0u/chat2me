@@ -2,6 +2,7 @@
 set -eu
 
 MODELS_DIR="${MODELS_DIR:-/models}"
+DEFAULT_MODELS_DIR="${DEFAULT_MODELS_DIR:-/opt/chat2me-default-models}"
 DEFAULT_CONFIG_DIR="${DEFAULT_CONFIG_DIR:-/defaults/config}"
 CONFIG_DIR="${CONFIG_DIR:-/app/config}"
 RUNTIME_CONFIG_PATH="${RUNTIME_CONFIG_PATH:-$CONFIG_DIR/runtime.env}"
@@ -196,7 +197,8 @@ resolve_kws_model() {
   KWS_MODEL_NAME="sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20"
   case "$KWS_MODEL_NAME" in
     sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20)
-      KWS_MODEL_URL="https://github.com/k2-fsa/sherpa-onnx/releases/download/kws-models/sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20.tar.bz2"
+      KWS_MODEL_URL="${KWS_MODEL_URL:-}"
+      KWS_MODEL_SHA256="${KWS_MODEL_SHA256:-68447f4fbc67e70eee3a93961f36e81e98f47aef73ce7e7ca00885c6cd3616a6}"
       ;;
     *)
       known_value_error "KWS_MODEL" "$KWS_MODEL_NAME" "sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20"
@@ -212,7 +214,8 @@ resolve_asr_model() {
       VOICE_ASR_MODEL="${VOICE_ASR_MODEL:-sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09}"
       case "$VOICE_ASR_MODEL" in
         sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09)
-          ASR_MODEL_URL="https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09.tar.bz2"
+          ASR_MODEL_URL="${ASR_MODEL_URL:-}"
+          ASR_MODEL_SHA256="${ASR_MODEL_SHA256:-7305f7905bfcf77fa0b39388a313f3da35c68d971661a65475b56fb2162c8e63}"
           ;;
         *)
           known_value_error "VOICE_ASR_MODEL" "$VOICE_ASR_MODEL" "sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09"
@@ -232,9 +235,9 @@ resolve_tts_model() {
       VOICE_TTS_MODEL="${VOICE_TTS_MODEL:-MeloTTS-Chinese}"
       case "$VOICE_TTS_MODEL" in
         MeloTTS-Chinese)
-          MELOTTS_HF_REPO_ID="myshell-ai/MeloTTS-Chinese"
-          MELOTTS_HF_REVISION="main"
+          MELOTTS_MODEL_SOURCES="${MELOTTS_MODEL_SOURCES:-modelscope:myshell-ai/MeloTTS-Chinese:master}"
           MELOTTS_REQUIRED_FILES="config.json,checkpoint.pth"
+          MELOTTS_MODEL_SHA256S="${MELOTTS_MODEL_SHA256S:-config.json=d58b5acdab89ad2bbd65325affab309ae3cb964834b02f9a60587474e81c8bb9,checkpoint.pth=a74e9eadffff065c75eb6dfa040efa72cad23e72cfea70d39190bc174fb97093}"
           ;;
         *)
           known_value_error "VOICE_TTS_MODEL" "$VOICE_TTS_MODEL" "MeloTTS-Chinese"
@@ -263,7 +266,8 @@ resolve_homophone_replacer() {
   ASR_HOMOPHONE_DIR="${ASR_HOMOPHONE_DIR:-$MODELS_DIR/homophone}"
   ASR_HOMOPHONE_LEXICON="${ASR_HOMOPHONE_LEXICON:-$ASR_HOMOPHONE_DIR/lexicon.txt}"
   ASR_HOMOPHONE_RULE_FSTS="${ASR_HOMOPHONE_RULE_FSTS:-$ASR_HOMOPHONE_DIR/replace.fst}"
-  ASR_HOMOPHONE_LEXICON_URL="${ASR_HOMOPHONE_LEXICON_URL:-https://github.com/k2-fsa/sherpa-onnx/releases/download/hr-files/lexicon.txt}"
+  ASR_HOMOPHONE_LEXICON_URL="${ASR_HOMOPHONE_LEXICON_URL:-}"
+  ASR_HOMOPHONE_LEXICON_SHA256="${ASR_HOMOPHONE_LEXICON_SHA256:-978900e511bc481b8630cb6e4a573c12566fa092c366d5396e2c3823dec9dcb9}"
   ASR_HOMOPHONE_GENERATOR_PYTHON="${ASR_HOMOPHONE_GENERATOR_PYTHON:-/opt/homophone-fst/bin/python}"
   export ASR_HOMOPHONE_REPLACER_ENABLED
   export ASR_HOMOPHONE_GENERATE_ON_START
@@ -272,6 +276,7 @@ resolve_homophone_replacer() {
   export ASR_HOMOPHONE_LEXICON
   export ASR_HOMOPHONE_RULE_FSTS
   export ASR_HOMOPHONE_LEXICON_URL
+  export ASR_HOMOPHONE_LEXICON_SHA256
   export ASR_HOMOPHONE_GENERATOR_PYTHON
 }
 
@@ -618,6 +623,71 @@ content_length() {
     | awk 'tolower($1) == "content-length:" { size = $2 } END { gsub("\r", "", size); print size }'
 }
 
+sha256_ok() {
+  file="$1"
+  expected="$2"
+  [ -n "$expected" ] || return 0
+  actual="$(sha256sum "$file" | awk '{print $1}')"
+  if [ "$actual" = "$expected" ]; then
+    return 0
+  fi
+  echo "SHA256 mismatch for $file: expected $expected, got $actual" >&2
+  return 1
+}
+
+relative_file_sha256() {
+  relative_file="$1"
+  checksums="$2"
+  old_ifs="$IFS"
+  IFS=","
+  set -- $checksums
+  IFS="$old_ifs"
+  for item in "$@"; do
+    key="${item%%=*}"
+    value="${item#*=}"
+    if [ "$key" = "$relative_file" ] && [ "$key" != "$value" ]; then
+      echo "$value"
+      return 0
+    fi
+  done
+}
+
+copy_default_path() {
+  source="$1"
+  target="$2"
+  label="$3"
+
+  [ -e "$source" ] || return 1
+  rm -rf "$target"
+  mkdir -p "$(dirname "$target")"
+  cp -a "$source" "$target"
+  echo "[models] copied $label from image defaults"
+}
+
+copy_default_archive_model() {
+  name="$1"
+  target="$2"
+  default_relative_path="${3:-$name}"
+  source="$DEFAULT_MODELS_DIR/$default_relative_path"
+
+  copy_default_path "$source" "$target" "$name"
+}
+
+copy_default_file() {
+  source="$1"
+  target="$2"
+  label="$3"
+  expected_sha256="$4"
+
+  [ -s "$source" ] || return 1
+  if ! sha256_ok "$source" "$expected_sha256"; then
+    return 1
+  fi
+  mkdir -p "$(dirname "$target")"
+  cp "$source" "$target"
+  echo "[models] copied $label from image defaults"
+}
+
 print_download_progress() {
   label="$1"
   completed="$2"
@@ -713,15 +783,35 @@ download_with_progress() {
   return 1
 }
 
+download_verified_with_progress() {
+  output="$1"
+  url="$2"
+  label="$3"
+  expected_sha256="$4"
+
+  download_with_progress "$output" "$url" "$label"
+  if ! sha256_ok "$output" "$expected_sha256"; then
+    rm -f "$output"
+    return 1
+  fi
+}
+
 download_and_extract() {
   name="$1"
   url="$2"
   target="$3"
+  expected_sha256="$4"
   archive="$MODELS_DIR/$name.tar.bz2"
+
+  if [ -z "$url" ]; then
+    echo "No runtime download URL configured for $name, and image defaults are missing or invalid." >&2
+    echo "Set a trusted domestic URL with the corresponding SHA256, or rebuild the image with default models." >&2
+    return 1
+  fi
 
   echo "[models] preparing $name"
   rm -rf "$target"
-  download_with_progress "$archive" "$url" "$name"
+  download_verified_with_progress "$archive" "$url" "$name" "$expected_sha256"
   echo "[models] extracting $name"
   tmp_extract_dir="$MODELS_DIR/.extract.$name"
   rm -rf "$tmp_extract_dir"
@@ -746,16 +836,44 @@ PY
   echo "[models] extracted $name"
 }
 
-download_hf_snapshot() {
+download_model_snapshot() {
   target="$1"
-  repo_id="$2"
-  revision="$3"
-  label="$4"
-  required_files="$5"
+  label="$2"
+  required_files="$3"
+  sources="$4"
+  checksums="$5"
+
+  for source in $sources; do
+    provider="${source%%:*}"
+    rest="${source#*:}"
+    repo_id="${rest%:*}"
+    revision="${rest##*:}"
+    if [ "$repo_id" = "$rest" ]; then
+      revision=""
+    fi
+
+    if download_model_snapshot_from_source "$target" "$provider" "$repo_id" "$revision" "$label" "$required_files" "$checksums"; then
+      return 0
+    fi
+    echo "[models] failed downloading $label via $provider:$repo_id" >&2
+  done
+
+  echo "failed to download $label from official sources" >&2
+  return 1
+}
+
+download_model_snapshot_from_source() {
+  target="$1"
+  provider="$2"
+  repo_id="$3"
+  revision="$4"
+  label="$5"
+  required_files="$6"
+  checksums="$7"
 
   rm -rf "$target"
   mkdir -p "$target"
-  echo "[models] downloading $label from Hugging Face repo $repo_id"
+  echo "[models] downloading $label from $(source_display_name "$provider") repo $repo_id"
   old_ifs="$IFS"
   IFS=","
   set -- $required_files
@@ -763,33 +881,37 @@ download_hf_snapshot() {
   for relative_file in "$@"; do
     relative_file="$(printf '%s' "$relative_file" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
     [ -n "$relative_file" ] || continue
-    download_hf_file "$target/$relative_file" "$repo_id" "$revision" "$relative_file"
+    expected_sha256="$(relative_file_sha256 "$relative_file" "$checksums")"
+    download_model_file "$target/$relative_file" "$provider" "$repo_id" "$revision" "$relative_file" "$expected_sha256" || return 1
   done
 }
 
-download_hf_file() {
+source_display_name() {
+  case "$1" in
+    modelscope) echo "ModelScope" ;;
+    *) echo "$1" ;;
+  esac
+}
+
+download_model_file() {
   output="$1"
-  repo_id="$2"
-  revision="$3"
-  relative_file="$4"
+  provider="$2"
+  repo_id="$3"
+  revision="$4"
+  relative_file="$5"
+  expected_sha256="$6"
 
-  endpoints=""
-  if [ -n "${HF_ENDPOINT:-}" ]; then
-    endpoints="$HF_ENDPOINT"
-  fi
-  endpoints="$endpoints https://hf-mirror.com https://huggingface.co"
+  case "$provider" in
+    modelscope)
+      url="https://modelscope.cn/models/$repo_id/resolve/${revision:-master}/$relative_file"
+      ;;
+    *)
+      echo "unsupported model source provider: $provider" >&2
+      return 1
+      ;;
+  esac
 
-  for endpoint in $endpoints; do
-    endpoint="${endpoint%/}"
-    url="$endpoint/$repo_id/resolve/${revision:-main}/$relative_file"
-    if download_with_progress "$output" "$url" "$relative_file"; then
-      return 0
-    fi
-    echo "[models] failed downloading $repo_id/$relative_file via $endpoint" >&2
-  done
-
-  echo "failed to download $repo_id/$relative_file" >&2
-  return 1
+  download_verified_with_progress "$output" "$url" "$relative_file" "$expected_sha256"
 }
 
 ensure_archive_model() {
@@ -797,14 +919,21 @@ ensure_archive_model() {
   url="$2"
   check_name="$3"
   target="$4"
+  expected_sha256="$5"
+  default_relative_path="${6:-$name}"
 
   if "$check_name"; then
     echo "$name is ready"
     return
   fi
 
+  if copy_default_archive_model "$name" "$target" "$default_relative_path" && "$check_name"; then
+    echo "$name is ready"
+    return
+  fi
+
   echo "$name is missing or invalid; re-downloading"
-  download_and_extract "$name" "$url" "$target"
+  download_and_extract "$name" "$url" "$target" "$expected_sha256"
 
   echo "[models] validating $name"
   if ! "$check_name"; then
@@ -813,21 +942,26 @@ ensure_archive_model() {
   fi
 }
 
-ensure_hf_snapshot_model() {
+ensure_snapshot_model() {
   name="$1"
-  repo_id="$2"
-  revision="$3"
-  check_name="$4"
-  target="$5"
-  required_files="$6"
+  sources="$2"
+  check_name="$3"
+  target="$4"
+  required_files="$5"
+  checksums="$6"
 
   if "$check_name"; then
     echo "$name is ready"
     return
   fi
 
+  if copy_default_path "$DEFAULT_MODELS_DIR/$name" "$target" "$name" && "$check_name"; then
+    echo "$name is ready"
+    return
+  fi
+
   echo "$name is missing or invalid; re-downloading"
-  download_hf_snapshot "$target" "$repo_id" "$revision" "$name" "$required_files"
+  download_model_snapshot "$target" "$name" "$required_files" "$sources" "$checksums"
 
   echo "[models] validating $name"
   if ! "$check_name"; then
@@ -837,13 +971,13 @@ ensure_hf_snapshot_model() {
 }
 
 ensure_melotts_model() {
-  ensure_hf_snapshot_model \
+  ensure_snapshot_model \
     "$VOICE_TTS_MODEL" \
-    "$MELOTTS_HF_REPO_ID" \
-    "$MELOTTS_HF_REVISION" \
+    "$MELOTTS_MODEL_SOURCES" \
     melotts_model_ok \
     "$TTS_MODEL_DIR" \
-    "$MELOTTS_REQUIRED_FILES"
+    "$MELOTTS_REQUIRED_FILES" \
+    "$MELOTTS_MODEL_SHA256S"
 }
 
 enabled_value() {
@@ -858,7 +992,16 @@ ensure_homophone_replacer_resources() {
 
   mkdir -p "$ASR_HOMOPHONE_DIR"
   if [ ! -s "$ASR_HOMOPHONE_LEXICON" ]; then
-    download_with_progress "$ASR_HOMOPHONE_LEXICON" "$ASR_HOMOPHONE_LEXICON_URL" "homophone lexicon"
+    if ! copy_default_file "$DEFAULT_MODELS_DIR/homophone/lexicon.txt" "$ASR_HOMOPHONE_LEXICON" "homophone lexicon" "$ASR_HOMOPHONE_LEXICON_SHA256"; then
+      if [ -z "$ASR_HOMOPHONE_LEXICON_URL" ]; then
+        echo "No runtime download URL configured for homophone lexicon, and image defaults are missing or invalid." >&2
+        exit 1
+      fi
+      download_verified_with_progress "$ASR_HOMOPHONE_LEXICON" "$ASR_HOMOPHONE_LEXICON_URL" "homophone lexicon" "$ASR_HOMOPHONE_LEXICON_SHA256"
+    fi
+  elif ! sha256_ok "$ASR_HOMOPHONE_LEXICON" "$ASR_HOMOPHONE_LEXICON_SHA256"; then
+    echo "Homophone lexicon checksum validation failed: $ASR_HOMOPHONE_LEXICON" >&2
+    exit 1
   fi
 
   if enabled_value "$ASR_HOMOPHONE_GENERATE_ON_START"; then
@@ -1014,7 +1157,9 @@ if model_selected kws; then
     "$KWS_MODEL_NAME" \
     "$KWS_MODEL_URL" \
     kws_model_ok \
-    "$KWS_MODEL"
+    "$KWS_MODEL" \
+    "$KWS_MODEL_SHA256" \
+    "$KWS_MODEL_NAME"
 fi
 
 if model_selected asr; then
@@ -1023,7 +1168,9 @@ if model_selected asr; then
     "$VOICE_ASR_MODEL" \
     "$ASR_MODEL_URL" \
     asr_model_ok \
-    "$ASR_MODEL"
+    "$ASR_MODEL" \
+    "$ASR_MODEL_SHA256" \
+    "$VOICE_ASR_ENGINE/$VOICE_ASR_MODEL"
   resolve_homophone_replacer
   ensure_homophone_replacer_resources
 fi

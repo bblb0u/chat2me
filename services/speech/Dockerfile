@@ -18,6 +18,7 @@ WORKDIR /app
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
        alsa-utils \
+       bzip2 \
        ca-certificates \
        curl \
        libasound2-plugins \
@@ -37,13 +38,18 @@ RUN python3 -m pip install --no-cache-dir \
       --timeout "$CHAT2ME_PIP_TIMEOUT" \
       -r requirements.txt
 
+COPY runtime/tools/preload.sh /opt/preload.sh
+RUN chmod +x /opt/preload.sh \
+    && DEFAULT_MODEL_SET=kws /opt/preload.sh \
+    && rm -f /opt/preload.sh
+
 COPY config /defaults/config
-COPY runtime/entrypoints/audio.sh /entrypoint.sh
+COPY runtime/entrypoints/audio.sh /audio.sh
 COPY runtime/shared/common.py ./app/common.py
 COPY runtime/shared/voice.py ./app/voice.py
 COPY services/speech/app/respeaker.py ./app/respeaker.py
 COPY services/speech/app/main.py ./app/main.py
-RUN chmod +x /entrypoint.sh
+RUN chmod +x /audio.sh
 
-ENTRYPOINT ["/entrypoint.sh"]
+ENTRYPOINT ["/audio.sh"]
 CMD ["python3", "-m", "app.main"]

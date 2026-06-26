@@ -320,7 +320,7 @@ config/                 默认配置模板
 firmware/display/       ESP32-S3 显示屏固件
 runtime/entrypoints/    镜像入口脚本
 runtime/shared/         各服务共享运行时代码
-runtime/tools/          同音词 FST 生成工具
+runtime/tools/          构建和运行辅助工具
 services/asr/           ASR 服务
 services/core/          Core 编排服务
 services/llm/           LLM 网关服务

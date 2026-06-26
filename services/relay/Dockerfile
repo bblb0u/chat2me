@@ -15,10 +15,10 @@ COPY services/relay/requirements.txt requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY config /defaults/config
-COPY runtime/entrypoints/config.sh /entrypoint.sh
+COPY runtime/entrypoints/config.sh /config.sh
 COPY runtime/shared/common.py ./app/common.py
 COPY services/relay/app/main.py ./app/main.py
-RUN chmod +x /entrypoint.sh
+RUN chmod +x /config.sh
 
-ENTRYPOINT ["/entrypoint.sh"]
+ENTRYPOINT ["/config.sh"]
 CMD ["python3", "-m", "app.main"]
