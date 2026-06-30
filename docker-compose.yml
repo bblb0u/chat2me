@@ -14,9 +14,9 @@ services:
       JETSON_JETPACK: "5"
       LD_LIBRARY_PATH: /usr/lib/ollama:/usr/lib/ollama/cuda_jetpack5:/usr/local/nvidia/lib:/usr/local/nvidia/lib64
     volumes:
-      - ./data/config:/app/config
-      - ./data/log:/app/log
-      - ./data/ollama:/root/.ollama
+      - /opt/chat2me/data/config:/app/config
+      - /opt/chat2me/data/log:/app/log
+      - /opt/chat2me/data/ollama:/root/.ollama
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8082/health"]
       interval: 30s
@@ -31,8 +31,8 @@ services:
     environment:
       VOICE_ROLE: chat2me-core
     volumes:
-      - ./data/config:/app/config
-      - ./data/log:/app/log
+      - /opt/chat2me/data/config:/app/config
+      - /opt/chat2me/data/log:/app/log
     depends_on:
       chat2me-llm:
         condition: service_started
@@ -53,8 +53,8 @@ services:
       - "c 188:* rwm"
     volumes:
       - /dev:/host-dev
-      - ./data/config:/app/config
-      - ./data/log:/app/log
+      - /opt/chat2me/data/config:/app/config
+      - /opt/chat2me/data/log:/app/log
     environment:
       VOICE_ROLE: chat2me-relay
     healthcheck:
@@ -72,9 +72,9 @@ services:
     environment:
       VOICE_ROLE: chat2me-asr
     volumes:
-      - ./data/models:/models
-      - ./data/config:/app/config
-      - ./data/log:/app/log
+      - /opt/chat2me/data/models:/models
+      - /opt/chat2me/data/config:/app/config
+      - /opt/chat2me/data/log:/app/log
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8092/health"]
       interval: 30s
@@ -94,9 +94,9 @@ services:
       NVIDIA_DRIVER_CAPABILITIES: compute,utility
       LD_LIBRARY_PATH: /usr/local/cuda-11.4/targets/aarch64-linux/lib:/usr/local/cuda/lib64:/usr/lib/aarch64-linux-gnu:/usr/lib/aarch64-linux-gnu/tegra
     volumes:
-      - ./data/models:/models
-      - ./data/config:/app/config
-      - ./data/log:/app/log
+      - /opt/chat2me/data/models:/models
+      - /opt/chat2me/data/config:/app/config
+      - /opt/chat2me/data/log:/app/log
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8093/health"]
       interval: 30s
@@ -115,9 +115,9 @@ services:
     environment:
       VOICE_ROLE: chat2me-speech
     volumes:
-      - ./data/models:/models
-      - ./data/config:/app/config
-      - ./data/log:/app/log
+      - /opt/chat2me/data/models:/models
+      - /opt/chat2me/data/config:/app/config
+      - /opt/chat2me/data/log:/app/log
       - /dev/snd:/dev/snd
       - /dev/bus/usb:/dev/bus/usb
       - /run/user:/host-run/user:ro
